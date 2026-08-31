@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, fmtMoney, fmtDateTime, API } from "@/lib/api";
+import { api, fmtMoney, fmtDateTime } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FileText, Download, Repeat2, Trash2, Plus, ScrollText } from "lucide-react";
@@ -20,7 +20,23 @@ export default function Documents() {
     return new Date(r.valid_until) < new Date();
   };
 
-  const download = (id) => window.open(`${API}/documents/${id}/pdf`, "_blank");
+  const download = async (id) => {
+    try {
+      const res = await api.get(`/documents/${id}/pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.download = `documento_${id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      toast.error("Falha ao gerar PDF");
+    }
+  };
 
   const convert = async (id) => {
     if (!confirm("Converter este orçamento em venda?")) return;

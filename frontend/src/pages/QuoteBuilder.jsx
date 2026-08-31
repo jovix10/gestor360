@@ -33,6 +33,15 @@ export default function QuoteBuilder() {
     return m;
   }, [products]);
 
+  const findProduct = (val) => {
+    if (!val) return null;
+    const key = String(val).toLowerCase().trim();
+    if (!key) return null;
+    if (productMap[key]) return productMap[key];
+    // fallback: match by description contains (case-insensitive)
+    return products.find(p => p.description.toLowerCase().includes(key)) || null;
+  };
+
   const updateLine = (idx, patch) => {
     setLines((cur) => cur.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
   };
@@ -47,8 +56,7 @@ export default function QuoteBuilder() {
   };
 
   const onCodeBlur = (idx, val) => {
-    if (!val) return;
-    const p = productMap[val.toLowerCase()];
+    const p = findProduct(val);
     if (p) applyProduct(idx, p);
   };
 
@@ -108,8 +116,22 @@ export default function QuoteBuilder() {
         notes,
       });
       toast.success(`${docType === "orcamento" ? "Orçamento" : "Venda"} Nº ${String(data.number).padStart(6, "0")} criado`);
-      // open pdf
-      window.open(`${API}/documents/${data.id}/pdf`, "_blank");
+      // open pdf via anchor click (survives popup blockers, preserves auth)
+      try {
+        const res = await api.get(`/documents/${data.id}/pdf`, { responseType: "blob" });
+        const url = URL.createObjectURL(res.data);
+        const a = document.createElement("a");
+        a.href = url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.download = `${docType}_${String(data.number).padStart(6, "0")}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch (e) {
+        toast.error("Documento salvo, mas falhou ao abrir PDF");
+      }
       navigate("/documentos");
     } catch (err) {
       toast.error(err.response?.data?.detail || "Erro ao salvar");
@@ -202,7 +224,7 @@ export default function QuoteBuilder() {
                         list={`prod-list-${idx}`}
                       />
                       <datalist id={`prod-list-${idx}`}>
-                        {products.map(p => <option key={p.id} value={p.code}>{p.description}</option>)}
+                        {products.map(p => <option key={p.id} value={p.code}>{p.code} — {p.description}</option>)}
                       </datalist>
                     </td>
                     <td className="px-3 py-1.5">

@@ -4,8 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Plus, Pencil, Trash2, Search, Package } from "lucide-react";
 import { toast } from "sonner";
+
+const UNITS = ["UN", "PC", "PAR", "KG", "G", "LT", "ML", "MT", "CM", "M2", "M3", "PCT", "CX", "DZ", "RL", "SC"];
 
 const empty = { code: "", description: "", price: 0, stock: 0, unit: "UN" };
 
@@ -70,7 +73,15 @@ export default function Products() {
               <form onSubmit={save} className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div><Label>Código *</Label><Input data-testid="product-code-input" required value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} /></div>
-                  <div><Label>Unidade</Label><Input data-testid="product-unit-input" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="UN" /></div>
+                  <div>
+                    <Label>Unidade de medida</Label>
+                    <Select value={form.unit} onValueChange={(v) => setForm({ ...form, unit: v })}>
+                      <SelectTrigger data-testid="product-unit-select" className="mt-0"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {UNITS.map(u => <SelectItem key={u} value={u} data-testid={`unit-option-${u}`}>{u}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <div><Label>Descrição *</Label><Input data-testid="product-description-input" required value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
                 <div className="grid grid-cols-2 gap-3">

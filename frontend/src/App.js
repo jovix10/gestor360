@@ -11,6 +11,7 @@ import Clients from "@/pages/Clients";
 import Products from "@/pages/Products";
 import QuoteBuilder from "@/pages/QuoteBuilder";
 import Documents from "@/pages/Documents";
+import Finances from "@/pages/Finances";
 import Settings from "@/pages/Settings";
 
 function AppRouter() {
@@ -29,6 +30,7 @@ function AppRouter() {
         <Route path="/produtos" element={<Products />} />
         <Route path="/orcamento" element={<QuoteBuilder />} />
         <Route path="/documentos" element={<Documents />} />
+        <Route path="/financas" element={<Finances />} />
         <Route path="/configuracoes" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

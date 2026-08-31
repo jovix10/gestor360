@@ -1,108 +1,45 @@
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, fmtMoney } from "@/lib/api";
-import { Users, Package, FileText, TrendingUp, ArrowRight, Plus } from "lucide-react";
+import { Users, Package, FileText, ScrollText, ArrowRight, Plus, Settings, LineChart } from "lucide-react";
 
-const cards = [
-  { key: "clients", label: "Clientes", icon: Users, to: "/clientes" },
-  { key: "products", label: "Produtos", icon: Package, to: "/produtos" },
-  { key: "orcamentos", label: "Orçamentos", icon: FileText, to: "/documentos" },
-  { key: "vendas", label: "Vendas", icon: TrendingUp, to: "/documentos" },
+const shortcuts = [
+  { to: "/orcamento", label: "Novo Documento", desc: "Monte um orçamento ou venda", icon: Plus, primary: true, testId: "sc-new-doc" },
+  { to: "/clientes", label: "Clientes", desc: "Cadastro e histórico", icon: Users, testId: "sc-clients" },
+  { to: "/produtos", label: "Produtos", desc: "Catálogo e preços", icon: Package, testId: "sc-products" },
+  { to: "/documentos", label: "Documentos", desc: "Orçamentos e vendas", icon: ScrollText, testId: "sc-documents" },
+  { to: "/financas", label: "Finanças", desc: "Métricas e receita", icon: LineChart, testId: "sc-finances" },
+  { to: "/configuracoes", label: "Empresa", desc: "Dados e logo do PDF", icon: Settings, testId: "sc-settings" },
 ];
 
 export default function Dashboard() {
-  const [stats, setStats] = useState(null);
-  const [recent, setRecent] = useState([]);
-
-  useEffect(() => {
-    api.get("/stats").then(r => setStats(r.data));
-    api.get("/documents").then(r => setRecent(r.data.slice(0, 5)));
-  }, []);
-
   return (
-    <div className="space-y-8">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="font-display text-3xl sm:text-4xl font-semibold tracking-tight">Painel</h1>
-          <p className="text-sm text-zinc-500 mt-1">Visão geral do seu negócio.</p>
-        </div>
-        <Link
-          to="/orcamento"
-          data-testid="quick-new-doc-btn"
-          className="inline-flex items-center gap-2 h-11 px-5 rounded-md bg-[#F05D23] text-white font-semibold hover:bg-[#D94E1B] transition-colors"
-        >
-          <Plus className="w-4 h-4" /> Novo Documento
-        </Link>
+    <div className="space-y-10">
+      <div>
+        <div className="text-xs uppercase tracking-widest text-[#F05D23] font-semibold">Bem-vindo ao Gestor360</div>
+        <h1 className="font-display text-3xl sm:text-4xl font-semibold tracking-tight mt-2">Por onde começar?</h1>
+        <p className="text-sm text-zinc-500 mt-2 max-w-xl">
+          Um ambiente limpo para você tocar sua operação. Escolha um atalho abaixo e siga em frente.
+        </p>
       </div>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {cards.map((c) => (
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {shortcuts.map((s) => (
           <Link
-            to={c.to}
-            key={c.key}
-            data-testid={`stat-${c.key}`}
-            className="group p-5 border border-zinc-200 rounded-lg bg-white hover:border-[#F05D23] transition-colors"
+            key={s.to}
+            to={s.to}
+            data-testid={s.testId}
+            className={`group p-6 border rounded-lg transition-all
+              ${s.primary
+                ? "bg-[#09090B] text-white border-[#09090B] hover:bg-[#F05D23] hover:border-[#F05D23]"
+                : "bg-white border-zinc-200 hover:border-[#F05D23]"}`}
           >
             <div className="flex items-center justify-between">
-              <c.icon className="w-5 h-5 text-zinc-400 group-hover:text-[#F05D23] transition-colors" />
-              <ArrowRight className="w-4 h-4 text-zinc-300 group-hover:text-[#F05D23] group-hover:translate-x-0.5 transition-all" />
+              <s.icon className={`w-6 h-6 ${s.primary ? "text-[#F05D23] group-hover:text-white" : "text-zinc-400 group-hover:text-[#F05D23]"} transition-colors`} />
+              <ArrowRight className={`w-4 h-4 ${s.primary ? "text-white/70" : "text-zinc-300 group-hover:text-[#F05D23]"} group-hover:translate-x-0.5 transition-all`} />
             </div>
-            <div className="mt-4 font-mono-num text-3xl font-semibold tracking-tight text-zinc-900">
-              {stats ? stats[c.key] : "—"}
-            </div>
-            <div className="text-xs uppercase tracking-wider text-zinc-500 mt-1">{c.label}</div>
+            <div className="font-display text-xl font-semibold mt-6">{s.label}</div>
+            <div className={`text-sm mt-1 ${s.primary ? "text-zinc-300" : "text-zinc-500"}`}>{s.desc}</div>
           </Link>
         ))}
-      </div>
-
-      {/* Revenue banner */}
-      <div className="p-6 sm:p-8 rounded-lg border border-zinc-200 bg-gradient-to-br from-white to-[#FDF0EC] flex flex-col sm:flex-row sm:items-center gap-6">
-        <div className="flex-1">
-          <div className="text-xs uppercase tracking-wider text-zinc-500">Receita do mês</div>
-          <div className="font-mono-num text-4xl sm:text-5xl font-bold tracking-tight mt-2 text-zinc-900">
-            {stats ? fmtMoney(stats.revenue_month) : "—"}
-          </div>
-        </div>
-        <Link
-          to="/documentos"
-          data-testid="see-documents-btn"
-          className="inline-flex items-center gap-2 px-5 h-11 rounded-md border border-zinc-900 text-zinc-900 hover:bg-zinc-900 hover:text-white transition-colors font-semibold"
-        >
-          Ver documentos <ArrowRight className="w-4 h-4" />
-        </Link>
-      </div>
-
-      {/* Recent */}
-      <div>
-        <h2 className="font-display text-xl font-semibold mb-4">Recentes</h2>
-        {recent.length === 0 ? (
-          <div className="border border-dashed border-zinc-300 rounded-lg p-10 text-center">
-            <p className="text-sm text-zinc-500">Nenhum documento ainda.</p>
-            <Link to="/orcamento" className="text-[#F05D23] font-semibold text-sm hover:underline">Criar o primeiro →</Link>
-          </div>
-        ) : (
-          <div className="border border-zinc-200 rounded-lg overflow-hidden bg-white">
-            {recent.map((d) => (
-              <Link
-                key={d.id}
-                to={`/documentos`}
-                className="flex items-center justify-between p-4 border-b border-zinc-100 last:border-b-0 hover:bg-zinc-50 transition-colors"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded ${d.doc_type === "orcamento" ? "bg-zinc-100 text-zinc-700" : "bg-[#FDF0EC] text-[#F05D23]"}`}>
-                      {d.doc_type === "orcamento" ? "Orçamento" : "Venda"}
-                    </span>
-                    <span className="font-mono-num text-sm">Nº {String(d.number).padStart(6, "0")}</span>
-                  </div>
-                  <div className="text-sm text-zinc-700 mt-1 truncate">{d.client_name}</div>
-                </div>
-                <div className="font-mono-num text-sm font-semibold text-zinc-900">{fmtMoney(d.total)}</div>
-              </Link>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

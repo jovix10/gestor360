@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { LayoutDashboard, Users, Package, FileText, ScrollText, Settings, LogOut, Menu, MapPin, Clock } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, ScrollText, Settings, LogOut, Menu, MapPin, Clock, LineChart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 
 const nav = [
-  { to: "/dashboard", label: "Painel", icon: LayoutDashboard, testId: "nav-dashboard" },
+  { to: "/dashboard", label: "Início", icon: LayoutDashboard, testId: "nav-dashboard" },
   { to: "/clientes", label: "Clientes", icon: Users, testId: "nav-clients" },
   { to: "/produtos", label: "Produtos", icon: Package, testId: "nav-products" },
   { to: "/orcamento", label: "Novo Documento", icon: FileText, testId: "nav-new-doc" },
   { to: "/documentos", label: "Documentos", icon: ScrollText, testId: "nav-documents" },
+  { to: "/financas", label: "Finanças", icon: LineChart, testId: "nav-finances" },
   { to: "/configuracoes", label: "Empresa", icon: Settings, testId: "nav-settings" },
 ];
 

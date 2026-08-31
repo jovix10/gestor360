@@ -1,0 +1,36 @@
+{
+  "summary": "Backend-only regression (iteration 2) after frontend-only changes (unit Select, description fallback in QuoteBuilder, blob-based PDF). Created pytest suite /app/backend/tests/backend_test.py with 19 tests — ALL 19 PASSED. Confirmed: JWT login + /auth/me, 401 for unauthenticated, all 16 Portuguese units (UN,PC,PAR,KG,G,LT,ML,MT,CM,M2,M3,PCT,CX,DZ,RL,SC) accepted and persisted on POST /api/products (explicit persistence re-GET for KG/CX/PCT/PAR), duplicate product code -> 400, full E2E flow (client -> product with unit CX -> orçamento with line -> GET /api/documents/{id}/pdf returns 200, content-type application/pdf, body starts with %PDF, ~2.9KB) -> POST /convert -> PDF of the resulting venda also 200/%PDF. PDF of unknown id -> 404, PDF without Bearer -> 401 (so frontend blob flow requires the interceptor token, which is wired via localStorage g360_token in lib/api.js — verified statically). Regression GETs /api/clients, /api/products, /api/documents, /api/stats, /api/company all 200 with no mongo _id leakage. Frontend automation skipped per request (testing_type: backend only).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "PDF open via blob (QuoteBuilder save + Documents Download button)",
+        "issue": "STATIC REVIEW ONLY (not browser-verified): window.open(URL.createObjectURL(blob)) is called AFTER an awaited axios request, so the call is outside the user-activation window and Chrome/Safari popup blockers can silently suppress it — this is the same class of failure as the original 'PDF não gera' report. Safer: create an <a> with href=blobUrl and download=filename and click it, or open the window synchronously before the await and set win.location = blobUrl. Also URL.revokeObjectURL is never called (blob leak), and on error err.response.data is a Blob so err.response?.data?.detail is always undefined (generic toast only).",
+        "affected_selectors": ["[data-testid^='pdf-']", "[data-testid='save-doc-btn']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "No backend fixes required — backend is 100% green including PDF generation.",
+    "Optional hardening: replace window.open(blobUrl) with an anchor-download click (or synchronous window.open before await) in QuoteBuilder.jsx and Documents.jsx to avoid popup-blocker suppression; add URL.revokeObjectURL after use.",
+    "Optional: QuoteBuilder findProduct description fallback uses `includes` on the first match only — consider startsWith/code-prefix priority and showing a suggestion list when multiple products match, to avoid silently picking the wrong product."
+  ],
+  "critical_code_review_comments": [
+    "Frontend blob error branch cannot read backend error detail because responseType:'blob' makes err.response.data a Blob — parse via await err.response.data.text() if a real message is needed.",
+    "QuoteBuilder productMap keys on p.code.toLowerCase(); a product created with an empty/whitespace code would map to '' and could be matched unexpectedly. Backend allows code as a plain required str with no min_length — consider validating non-empty code in the Product model."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Test clients/products prefixed TEST_ created and deleted in session teardown; documents created for the PDF flow (TEST_ orcamento pdf + converted venda) remain in DB since no cleanup was required.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "netozincaovendas@gmail.com / Gestor360! (read from /app/memory/test_credentials.md — valid)",
+  "context_for_next_testing_agent": "Reusable pytest suite at /app/backend/tests/backend_test.py (session-scoped authenticated client fixture + TEST_ cleanup). Run: cd /app/backend && python -m pytest tests/backend_test.py -v. Backend document schema fields are lines/unit_price/discount_pct. PDF endpoint requires Bearer or cookie auth. Frontend UI (Products unit Select data-testid=product-unit-select, unit-option-{U}; Documents pdf-{id}/convert-{id}/del-{id}) has testids ready if UI automation is requested next; the popup-blocker risk on window.open(blobUrl) is the main thing to verify in a real browser.",
+  "rca_of_the_issue": "No backend regression: /api/documents/{id}/pdf returns a valid reportlab PDF (200, application/pdf, %PDF magic bytes) for both orçamento and converted venda, and 401 without a token. Therefore the original 'PDF not generating' symptom was client-side (missing Authorization on a plain window.open navigation); the new blob approach fixes auth but introduces a popup-blocker exposure because window.open runs after an await."
+}
