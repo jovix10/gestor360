@@ -22,7 +22,7 @@ const ROLE_BADGE = {
   vendedor: { label: "Vendedor", bg: "bg-zinc-100", fg: "text-zinc-700" },
 };
 
-function SidebarInner({ onLogout, user }) {
+function SidebarInner({ onLogout, user, onNavigate }) {
   const nav = ALL_NAV.filter(n => n.roles.includes(user?.role));
   const badge = ROLE_BADGE[user?.role] || ROLE_BADGE.vendedor;
   return (
@@ -50,6 +50,7 @@ function SidebarInner({ onLogout, user }) {
             key={n.to}
             to={n.to}
             data-testid={n.testId}
+            onClick={() => onNavigate?.()}
             className={({ isActive }) =>
               `group flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors relative
               ${isActive
@@ -128,7 +129,7 @@ export default function Layout() {
 
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="left" className="p-0 w-72">
-          <SidebarInner onLogout={doLogout} user={user} />
+          <SidebarInner onLogout={doLogout} user={user} onNavigate={() => setOpen(false)} />
         </SheetContent>
       </Sheet>
 
