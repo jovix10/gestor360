@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, fmtMoney, fmtDateTime } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { Users, Package, FileText, TrendingUp, ArrowRight } from "lucide-react";
 
 const cards = [
@@ -11,6 +12,7 @@ const cards = [
 ];
 
 export default function Finances() {
+  const { isVendedor } = useAuth();
   const [stats, setStats] = useState(null);
   const [recent, setRecent] = useState([]);
 
@@ -23,7 +25,9 @@ export default function Finances() {
     <div className="space-y-8">
       <div>
         <h1 className="font-display text-3xl sm:text-4xl font-semibold tracking-tight">Finanças</h1>
-        <p className="text-sm text-zinc-500 mt-1">Métricas, receita e documentos recentes.</p>
+        <p className="text-sm text-zinc-500 mt-1">
+          {isVendedor ? "Seu desempenho pessoal na empresa." : "Métricas, receita e documentos recentes da empresa."}
+        </p>
       </div>
 
       {/* Stat cards */}

@@ -1,28 +1,47 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { LayoutDashboard, Users, Package, FileText, ScrollText, Settings, LogOut, Menu, MapPin, Clock, LineChart } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, ScrollText, Settings, LogOut, Menu, MapPin, Clock, LineChart, UsersRound, Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 
-const nav = [
-  { to: "/dashboard", label: "Início", icon: LayoutDashboard, testId: "nav-dashboard" },
-  { to: "/clientes", label: "Clientes", icon: Users, testId: "nav-clients" },
-  { to: "/produtos", label: "Produtos", icon: Package, testId: "nav-products" },
-  { to: "/orcamento", label: "Novo Documento", icon: FileText, testId: "nav-new-doc" },
-  { to: "/documentos", label: "Documentos", icon: ScrollText, testId: "nav-documents" },
-  { to: "/financas", label: "Finanças", icon: LineChart, testId: "nav-finances" },
-  { to: "/configuracoes", label: "Empresa", icon: Settings, testId: "nav-settings" },
+const ALL_NAV = [
+  { to: "/dashboard", label: "Início", icon: LayoutDashboard, testId: "nav-dashboard", roles: ["owner", "gerente", "vendedor"] },
+  { to: "/clientes", label: "Clientes", icon: Users, testId: "nav-clients", roles: ["owner", "gerente", "vendedor"] },
+  { to: "/produtos", label: "Produtos", icon: Package, testId: "nav-products", roles: ["owner", "gerente", "vendedor"] },
+  { to: "/orcamento", label: "Novo Documento", icon: FileText, testId: "nav-new-doc", roles: ["owner", "gerente", "vendedor"] },
+  { to: "/documentos", label: "Documentos", icon: ScrollText, testId: "nav-documents", roles: ["owner", "gerente", "vendedor"] },
+  { to: "/financas", label: "Finanças", icon: LineChart, testId: "nav-finances", roles: ["owner", "gerente"] },
+  { to: "/equipe", label: "Equipe", icon: UsersRound, testId: "nav-team", roles: ["owner"] },
+  { to: "/configuracoes", label: "Empresa", icon: Settings, testId: "nav-settings", roles: ["owner", "gerente"] },
 ];
 
-function SidebarInner({ onLogout }) {
+const ROLE_BADGE = {
+  owner: { label: "Dono", bg: "bg-[#F05D23]/10", fg: "text-[#F05D23]" },
+  gerente: { label: "Gerente", bg: "bg-zinc-900/10", fg: "text-zinc-900" },
+  vendedor: { label: "Vendedor", bg: "bg-zinc-100", fg: "text-zinc-700" },
+};
+
+function SidebarInner({ onLogout, user }) {
+  const nav = ALL_NAV.filter(n => n.roles.includes(user?.role));
+  const badge = ROLE_BADGE[user?.role] || ROLE_BADGE.vendedor;
   return (
     <div className="h-full flex flex-col bg-white">
-      <div className="p-5 flex items-center gap-3 border-b border-zinc-200">
-        <div className="w-9 h-9 rounded-md bg-[#F05D23] grid place-items-center font-display font-bold text-white">G</div>
-        <div>
-          <div className="font-display font-bold text-lg leading-none">Gestor360</div>
-          <div className="text-[10px] uppercase tracking-widest text-zinc-400 mt-1">ERP · Vendas</div>
+      <div className="p-5 border-b border-zinc-200">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-md bg-[#F05D23] grid place-items-center font-display font-bold text-white">G</div>
+          <div className="min-w-0">
+            <div className="font-display font-bold text-lg leading-none">Gestor360</div>
+            <div className="text-[10px] uppercase tracking-widest text-zinc-400 mt-1 truncate" data-testid="sidebar-company-name">
+              {user?.company?.name || "—"}
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <span className={`text-[10px] uppercase tracking-widest font-semibold px-2 py-0.5 rounded ${badge.bg} ${badge.fg}`} data-testid="sidebar-role-badge">
+            {badge.label}
+          </span>
+          <span className="text-xs text-zinc-500 truncate">{user?.name}</span>
         </div>
       </div>
       <nav className="flex-1 p-3 space-y-1">
@@ -71,7 +90,6 @@ export default function Layout() {
   }, []);
 
   useEffect(() => {
-    // browser geolocation → reverse geocode (best effort, non-blocking)
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
@@ -91,7 +109,7 @@ export default function Layout() {
 
   const doLogout = async () => {
     await logout();
-    navigate("/login", { replace: true });
+    navigate("/login/company", { replace: true });
   };
 
   const dateStr = now.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
@@ -100,32 +118,31 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen flex bg-[#FCFCFC]">
-      {/* Desktop sidebar */}
       <aside className="hidden lg:block w-64 border-r border-zinc-200 shrink-0 sticky top-0 h-screen">
-        <SidebarInner onLogout={doLogout} />
+        <SidebarInner onLogout={doLogout} user={user} />
       </aside>
 
-      {/* Mobile drawer */}
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="left" className="p-0 w-72">
-          <SidebarInner onLogout={doLogout} />
+          <SidebarInner onLogout={doLogout} user={user} />
         </SheetContent>
       </Sheet>
 
       <div className="flex-1 min-w-0">
         <header className="sticky top-0 z-30 backdrop-blur-xl bg-white/85 border-b border-zinc-200">
           <div className="flex items-center gap-3 px-4 sm:px-6 lg:px-8 h-16">
-            <Button
-              data-testid="menu-open-btn"
-              variant="ghost" size="icon"
-              className="lg:hidden"
-              onClick={() => setOpen(true)}
-            >
+            <Button data-testid="menu-open-btn" variant="ghost" size="icon" className="lg:hidden" onClick={() => setOpen(true)}>
               <Menu className="w-5 h-5" />
             </Button>
             <div className="min-w-0">
               <div className="font-display text-lg sm:text-xl font-semibold tracking-tight truncate">
                 Olá, <span className="text-[#F05D23]" data-testid="greeting-name">{firstName}</span>
+                {user?.company?.name && (
+                  <span className="hidden sm:inline text-zinc-400 font-normal text-sm ml-3">
+                    <Building2 className="w-3 h-3 inline mr-1 -mt-0.5" />
+                    {user.company.name}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3 text-xs text-zinc-500 mt-0.5">
                 <span className="capitalize hidden sm:inline">{dateStr}</span>

@@ -6,7 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
 export default function AuthCallback() {
   const navigate = useNavigate();
-  const { setUser } = useAuth();
+  const { checkAuth } = useAuth();
   const processed = useRef(false);
 
   useEffect(() => {
@@ -16,21 +16,22 @@ export default function AuthCallback() {
     const hash = window.location.hash;
     const match = hash.match(/session_id=([^&]+)/);
     if (!match) {
-      navigate("/login", { replace: true });
+      navigate("/login/company", { replace: true });
       return;
     }
     const sessionId = match[1];
     (async () => {
       try {
         const { data } = await api.post("/auth/session", { session_id: sessionId });
-        setUser(data.user);
+        await checkAuth();
         window.history.replaceState({}, document.title, "/dashboard");
-        navigate("/dashboard", { replace: true, state: { user: data.user } });
+        if (data.must_change_password) navigate("/change-password", { replace: true });
+        else navigate("/dashboard", { replace: true });
       } catch {
-        navigate("/login", { replace: true });
+        navigate("/login/owner", { replace: true });
       }
     })();
-  }, [navigate, setUser]);
+  }, [navigate, checkAuth]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-white">

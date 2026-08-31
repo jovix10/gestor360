@@ -1,0 +1,39 @@
+{
+  "summary": "Backend-only testing of Gestor360 v2 multi-tenant refactor (Company + User + role scoping). Created a fresh pytest suite /app/backend/tests/test_iteration4.py (41 tests) covering startup migration continuity, owner email login, company setup, public lookup, two-step company→user login, team CRUD, change-password, vendedor/gerente scoping, PDF, OAuth error branch and core CRUD regression. Result: 41/41 passed. No blocking defects. Several hardening gaps found (authorization on shared clients/products writes, missing 404s, ability to create a second owner) — reported, not fixed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT/POST/DELETE /api/clients, /api/products", "issue": "Vendedor (and gerente) can create/update/delete company clients and products — no role check. Verified: vendedor token successfully renamed an existing client and created a product. If shared data should be read-only for vendedor, add require_roles(['owner','gerente']) on write routes."},
+      {"endpoint": "POST /api/users", "issue": "Owner can create additional users with role='owner'. Those users can never be deleted (DELETE returns 400 'Não é possível excluir o dono') and can never be demoted (PUT returns 400) → permanently un-removable accounts. Either block role='owner' on create, or allow deleting non-primary owners (compare with company.owner_id)."},
+      {"endpoint": "PUT /api/products/{id}", "issue": "Returns 200 for a non-existent product id (matched_count not checked) and does not validate duplicate product `code` on update (POST does)."},
+      {"endpoint": "DELETE /api/clients/{id}, DELETE /api/documents/{id}", "issue": "Return 200 {ok:true} even when the id does not exist / is not visible to the caller — should return 404 so the UI can show a proper error."},
+      {"endpoint": "GET /api/auth/lookup-company", "issue": "Public and unrate-limited; allows enumeration of company codes/names. Consider rate limiting."},
+      {"endpoint": "POST /api/auth/register", "issue": "Publicly open self-signup creates a brand-new company+owner. Intentional? If not, gate it."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4.py",
+    "/app/test_reports/pytest/iteration4.xml",
+    "/app/test_reports/pytest/edge_findings.txt"
+  ],
+  "action_items": [
+    "Decide and enforce write authorization for clients/products (vendedor currently has full write access to shared data).",
+    "Prevent creating a second role='owner' via POST /api/users (or make such users deletable/demotable) — currently un-removable.",
+    "Return 404 instead of 200 on DELETE clients/documents and PUT products with unknown ids; validate duplicate product code on update."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/server.py is 1177 lines — split into routers (auth, users/company, catalog, documents, pdf) and a models module.",
+    "Clients/products routes have no role guard while documents/users/company do — authorization matrix is inconsistent across resources.",
+    "update_client/update_product/delete_* do not verify matched/deleted counts, so callers cannot distinguish success from no-op.",
+    "Old suites /app/backend/tests/backend_test.py and test_iteration3.py target the v1 single-tenant model and are now stale — delete or port them; they were intentionally not executed in this iteration."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration4.py", "/app/memory/test_credentials.md"],
+  "success_rate": {"backend": "100% (41/41 tests)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Startup migration verified intact: owner user_03c0e7e9776a has role=owner, username=admin, company_id=d161f620..., with its 2 clients / 3 products / 15 documents preserved and every document stamped with created_by (counts re-verified unchanged after the suite). Tests create and then delete: TEST clients/products/documents, vendedor user, gerente user, and a throwaway registered owner (removed directly from DB since the API cannot delete owners). The owner company is intentionally left configured as code='gestor360', password='Empresa123', name='Gestor360 Teste' (documented in /app/memory/test_credentials.md) so the two-step login can be exercised from the UI. Note: company.phone was set to 11977776666 and pending_setup is now False by design of the tests.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Owner: netozincaovendas@gmail.com / Gestor360! (username 'admin'); Company two-step: code 'gestor360' / password 'Empresa123'",
+  "context_for_next_testing_agent": "Run `cd /app/backend && python -m pytest tests/test_iteration4.py -q` (self-cleaning, idempotent — generates a random suffix per run and restores company code 'gestor360'/'Empresa123' at the end). It covers: migration continuity, owner-login (200/401), /auth/me, setup-company (short code 400, short pw 400, duplicate code 400, success + pending_setup False), lookup-company found/not-found, company-login (401 bad code/pw, cookie set, users list), user-login (401 without cookie, 401 bad username, success + must_change_password), team CRUD (create/list/update/demote-owner-400/404/delete), change-password (400 wrong current, 400 short, success), vendedor scoping (documents hidden, GET by id 404, PDF 404, stats scope='own', 403 on /users, /company PUT, /setup-company), gerente (can PUT /company, 403 on /users, sees all docs, scope='company'), created_by stamping on create + convert, PDF 200 application/pdf for owner and vendedor docs, /auth/session 401 on bad session_id, and core clients/products/documents CRUD + stats regression. Not covered: full Google OAuth happy path and the 403-for-non-owner-email branch (requires a real Emergent session_id); frontend UI (not requested this iteration).",
+  "rca_of_the_issue": "No functional defect reproduced. The hardening gaps above stem from role guards being applied only to documents/users/company routes; the clients/products routers were carried over from v1 unchanged (only the company_id filter was added), so they lack require_roles and matched_count checks. Reproduction for the owner-duplication issue: POST /api/users {role:'owner'} as owner → 200, then PUT role='vendedor' → 400 and DELETE → 400, leaving an un-removable account."
+}
