@@ -1,0 +1,102 @@
+{
+  "theme": "light",
+  "theme_strategy": "Light mode is mandatory per user request ('branco com detalhes laranja'). The design should feel like a high-end, clean ERP. Avoid dark mode unless explicitly toggled, as light mode with high contrast ensures maximum legibility for dense tables.",
+  "typography": {
+    "headings": {
+      "family": "Cabinet Grotesk, General Sans, or Outfit",
+      "weight": "font-semibold to font-bold",
+      "tracking": "tracking-tight",
+      "usage": "Use for the Dashboard greeting (e.g., 'Olá, João'), page titles, and major section headers. Do NOT use Inter for headings."
+    },
+    "body": {
+      "family": "IBM Plex Sans or Manrope",
+      "weight": "font-normal to font-medium",
+      "tracking": "tracking-normal",
+      "usage": "General UI text, labels, and paragraph copy. Optimizes for dense data readability."
+    },
+    "mono": {
+      "family": "IBM Plex Mono or JetBrains Mono",
+      "weight": "font-medium",
+      "usage": "CRITICAL: Must be used for all numeric columns in tables (Código, Quantidade, Valor, Desconto, Total). Always apply 'tabular-nums' utility class to ensure decimal points align perfectly."
+    }
+  },
+  "colors": {
+    "background": {
+      "app": "#FCFCFC",
+      "surface": "#FFFFFF",
+      "header": "rgba(255, 255, 255, 0.85)"
+    },
+    "brand": {
+      "primary": "#F05D23",
+      "hover": "#D94E1B",
+      "subtle": "#FDF0EC",
+      "usage": "Use as an accent (detalhes laranja) for primary CTAs, active states, focus rings, and active sidebar links. Do NOT flood the screen with orange."
+    },
+    "text": {
+      "primary": "#09090B",
+      "secondary": "#71717A",
+      "muted": "#A1A1AA"
+    },
+    "border": {
+      "default": "#E4E4E7",
+      "focus": "#F05D23"
+    },
+    "status": {
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444"
+    }
+  },
+  "visual_enhancers": {
+    "surfaces": "High-Density Cardless UI. Use 1px solid borders (#E4E4E7) to define areas instead of heavy shadows. If shadows are used, use 'shadow-sm' only.",
+    "glassmorphism": "Use for the sticky top header containing the greeting. backdrop-blur-xl with bg-white/85. Must have a 1px border-b to separate from content.",
+    "focus_states": "CRITICAL for keyboard navigation. All inputs and active table rows in the Quote Builder must have a crisp 'focus:ring-2 focus:ring-[#F05D23] focus:outline-none'."
+  },
+  "layouts": {
+    "global": "Sidebar navigation (collapsible on desktop, drawer on mobile) + Top sticky header. The top header MUST contain the greeting 'Olá, [Nome]', current date, location, and time.",
+    "density": "High Density Grid (Mode B). Use tight gaps (gap-4 or gap-6). Utilize all available screen space. Forms should use responsive CSS grid (grid-cols-1 md:grid-cols-3 lg:grid-cols-4).",
+    "mobile_strategy": "Never truncate table information. On mobile, transform table rows into stacked cards to prevent horizontal scrolling or missing data.",
+    "quote_builder_table": "Must function like an Excel sheet. Direct inline editing. Focus moves to the next row automatically when 'Enter' is pressed. Columns: Código (searchable), Descrição, Quantidade, Valor, Desconto (%), Valor Líquido."
+  },
+  "components": {
+    "general": "Use shadcn/ui primitives adapted for React.js (NOT .tsx).",
+    "sidebar": "Clean, icon-left aligned links. Active link has an orange left border (border-l-4 border-[#F05D23]) and orange icon.",
+    "table": "Dense padding (px-3 py-2). Use 'border-b border-border' for rows. Row hover state should be 'hover:bg-zinc-50'.",
+    "inputs": "Square or slightly rounded (rounded-md max). Must have clear active/focus states.",
+    "pdf_generator": "Use 'jspdf' and 'jspdf-autotable' or '@react-pdf/renderer' to generate professional quotes. Must include Company Header, CNPJ, Client Data, and the exact table layout."
+  },
+  "motion": {
+    "micro_interactions": "Subtle hover states on table rows and buttons (transition-colors duration-200).",
+    "navigation": "Smooth sliding transitions for mobile drawer.",
+    "restrictions": "Do not use heavy entrance animations on tables. Data must load instantly without stuttering."
+  },
+  "accessibility": {
+    "contrast": "Ensure white text on the #F05D23 orange button meets 3:1 minimum contrast. If not, use bold weight to increase legibility.",
+    "keyboard": "The 'Orçamento' table MUST be fully navigable by keyboard (Tab to move horizontally, Enter to add row/move down).",
+    "testing": "All interactive elements MUST include 'data-testid' attributes (e.g., data-testid='add-product-btn')."
+  },
+  "image_urls": {
+    "login_background": {
+      "url": "https://images.unsplash.com/photo-1775810985509-c002017e149f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwzfHxtaW5pbWFsaXN0JTIwYXJjaGl0ZWN0dXJlJTIwb3JhbmdlJTIwYWNjZW50fGVufDB8fHx8MTc4ODE4MTM1M3ww&ixlib=rb-4.1.0&q=85",
+      "category": "Authentication",
+      "description": "Minimalist modern architecture with an orange accent line. Perfect for the left/right split panel on the login screen to reinforce the brand identity before the user even logs in."
+    },
+    "empty_state": {
+      "url": "https://images.unsplash.com/photo-1575318633968-0383e7d07ca0?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDZ8MHwxfHNlYXJjaHwyfHxjbGVhbiUyMHdvcmtzcGFjZSUyMGxpZ2h0JTIwZGVza3xlbnwwfHx8fDE3ODgxODEzNTN8MA&ixlib=rb-4.1.0&q=85",
+      "category": "Dashboard / Empty States",
+      "description": "Clean, professional light workspace. Use softly faded (opacity-20) in the background of empty states when no clients or quotes exist yet."
+    }
+  },
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You are building 'Gestor360' - a professional ERP/SaaS dashboard.",
+    "File extension rule: You are working in a JavaScript codebase (.js, .jsx). DO NOT generate TypeScript (.ts, .tsx) files.",
+    "Color constraint: The user requested 'branco com detalhes laranja'. Do not use heavy colored backgrounds, generic tailwind blue, or excessive gradients. UI must be primarily white/light-gray with strategic orange (#F05D23) for CTAs and focus states.",
+    "Component rule: Use shadcn/ui components but ensure they are implemented in plain JS. If a component isn't available, build a clean, accessible HTML/Tailwind alternative.",
+    "Quote Builder UX (CRITICAL): The 'Orçamento' page is not just a form. It must be an inline-editable grid/table where pressing 'Enter' adds a new line automatically. This is for fast data entry by sales reps.",
+    "PDF functionality: Orçamentos and Vendas must generate a polished PDF. Treat the PDF layout as carefully as the web layout (Header, Client Info, Table, Totals).",
+    "Responsiveness (CRITICAL): On mobile, do not truncate table data or use horizontal scrollbars blindly. Reflow table rows into vertical stacked cards where the label and value are side-by-side.",
+    "Header requirement: The top header must dynamically show 'Olá, [Nome]', current date, location, and time as requested.",
+    "Never use completely transparent backgrounds for elements that overlay content (dropdowns, modals, sticky headers). Always use solid or blurred backgrounds.",
+    "Add 'data-testid' to every button, input, and interactive element."
+  ]
+}

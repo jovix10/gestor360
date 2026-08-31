@@ -1,0 +1,94 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand: #F05D23;
+  --brand-hover: #D94E1B;
+  --brand-subtle: #FDF0EC;
+  --ink: #09090B;
+  --muted: #71717A;
+  --line: #E4E4E7;
+}
+
+body {
+  margin: 0;
+  font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  color: var(--ink);
+  background: #FCFCFC;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-display { font-family: 'Outfit', ui-sans-serif, system-ui, sans-serif; letter-spacing: -0.01em; }
+.font-mono-num { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+@layer base {
+  :root {
+    --background: 0 0% 99%;
+    --foreground: 240 6% 6%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 6% 6%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 6% 6%;
+    --primary: 17 87% 54%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 240 6% 10%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 46%;
+    --accent: 17 87% 96%;
+    --accent-foreground: 17 87% 30%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
+    --ring: 17 87% 54%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+  ::selection { background: var(--brand-subtle); color: var(--brand); }
+}
+
+/* subtle scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #E4E4E7; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #C7C7CB; }
+
+/* Quote builder cell */
+.qb-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  outline: none;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: #09090B;
+}
+.qb-input:focus {
+  border-color: #F05D23;
+  background: #FFFFFF;
+  box-shadow: 0 0 0 3px rgba(240, 93, 35, 0.15);
+}
+.qb-input.qb-text {
+  font-family: 'Manrope', sans-serif;
+  font-variant-numeric: normal;
+  text-align: left;
+}
+
+.grain {
+  background-image:
+    radial-gradient(rgba(9,9,11,0.02) 1px, transparent 1px),
+    radial-gradient(rgba(9,9,11,0.02) 1px, transparent 1px);
+  background-size: 24px 24px, 24px 24px;
+  background-position: 0 0, 12px 12px;
+}

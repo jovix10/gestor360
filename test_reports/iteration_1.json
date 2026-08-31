@@ -1,0 +1,27 @@
+{
+  "summary": "Backend smoke test for Gestor360 completed. All 13 requested checks pass: JWT login, /auth/me, unauth 401, company GET/PUT, clients CRUD, products CRUD (unique code enforced), orçamento create with auto-number and +72h valid_until, venda with stock decrement (50->47 for qty=3), convert orçamento->venda producing new sequential venda with converted_from set, PDF (application/pdf, 2.6KB), stats endpoint, register returns token, and bad Emergent session_id returns 401.",
+  "tested_scope": ["backend", "auth", "integration"],
+  "passed": [
+    "POST /api/auth/login returns JWT token for seeded owner",
+    "GET /api/auth/me with Bearer token returns user info",
+    "GET /api/clients without token returns 401",
+    "PUT/GET /api/company roundtrip with name/cnpj/phone/stock_enabled",
+    "POST/GET/PUT/DELETE /api/clients (id auto-generated when omitted)",
+    "POST /api/products enforces unique code (dup returns 400); PUT/DELETE work",
+    "POST /api/documents orcamento: number auto-increments (1..4), valid_until=+72h, total computed on list",
+    "POST /api/documents venda with product line decrements product stock by quantity (50 -> 47)",
+    "POST /api/documents/{id}/convert creates venda copy with new sequential number and converted_from set",
+    "GET /api/documents/{id}/pdf returns 200 application/pdf, non-empty body (~2.6KB)",
+    "GET /api/stats returns clients/products/orcamentos/vendas/revenue_month",
+    "POST /api/auth/register creates user and returns token",
+    "POST /api/auth/session with invalid session_id returns 401"
+  ],
+  "failed": [],
+  "action_items": [
+    "Info only (not a bug): backend Document schema uses fields `lines`, `unit_price`, `discount_pct` (not `items`, `price`, `discount`). Frontend QuoteBuilder must send these exact names for lines to persist and stock to decrement.",
+    "Info only: DELETE /api/clients/{id} with empty id (e.g., after a client is stored without an id) 307-redirects to /api/clients which returns 405. This does not occur when id is properly generated (backend auto-generates via default_factory when payload omits `id`)."
+  ],
+  "success_rate": {"backend": "100%", "frontend": "not tested"},
+  "retest_needed": false,
+  "full_testing_deferred": true
+}
