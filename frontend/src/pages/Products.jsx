@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, fmtMoney } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,9 +11,10 @@ import { toast } from "sonner";
 
 const UNITS = ["UN", "PC", "PAR", "KG", "G", "LT", "ML", "MT", "CM", "M2", "M3", "PCT", "CX", "DZ", "RL", "SC"];
 
-const empty = { code: "", description: "", price: 0, stock: 0, unit: "UN" };
+const empty = { code: "", description: "", price: 0, cost_price: 0, stock: 0, unit: "UN" };
 
 export default function Products() {
+  const { isVendedor } = useAuth();
   const [rows, setRows] = useState([]);
   const [company, setCompany] = useState(null);
   const [q, setQ] = useState("");
@@ -85,11 +87,22 @@ export default function Products() {
                 </div>
                 <div><Label>Descrição *</Label><Input data-testid="product-description-input" required value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div><Label>Preço de tabela (R$) *</Label><Input data-testid="product-price-input" type="number" step="0.01" required value={form.price} onChange={(e) => setForm({ ...form, price: parseFloat(e.target.value) || 0 })} /></div>
-                  {company?.stock_enabled && (
-                    <div><Label>Estoque</Label><Input data-testid="product-stock-input" type="number" step="1" value={form.stock} onChange={(e) => setForm({ ...form, stock: parseFloat(e.target.value) || 0 })} /></div>
+                  <div>
+                    <Label>Preço de tabela (R$) *</Label>
+                    <Input data-testid="product-price-input" type="number" step="0.01" required value={form.price} onChange={(e) => setForm({ ...form, price: parseFloat(e.target.value) || 0 })} />
+                    <p className="text-[10px] text-zinc-500 mt-1">Aparece no orçamento/PDF para o cliente</p>
+                  </div>
+                  {!isVendedor && (
+                    <div>
+                      <Label>Preço de custo (R$)</Label>
+                      <Input data-testid="product-cost-input" type="number" step="0.01" value={form.cost_price || 0} onChange={(e) => setForm({ ...form, cost_price: parseFloat(e.target.value) || 0 })} />
+                      <p className="text-[10px] text-zinc-500 mt-1">Interno · não aparece no PDF</p>
+                    </div>
                   )}
                 </div>
+                {company?.stock_enabled && (
+                  <div><Label>Estoque</Label><Input data-testid="product-stock-input" type="number" step="1" value={form.stock} onChange={(e) => setForm({ ...form, stock: parseFloat(e.target.value) || 0 })} /></div>
+                )}
                 <DialogFooter>
                   <Button data-testid="save-product-btn" type="submit" className="bg-[#F05D23] hover:bg-[#D94E1B]">Salvar</Button>
                 </DialogFooter>
@@ -112,24 +125,33 @@ export default function Products() {
                 <tr>
                   <th className="text-left px-4 py-3">Código</th>
                   <th className="text-left px-4 py-3">Descrição</th>
-                  <th className="text-right px-4 py-3">Preço</th>
+                  {!isVendedor && <th className="text-right px-4 py-3">Custo</th>}
+                  <th className="text-right px-4 py-3">Tabela</th>
+                  {!isVendedor && <th className="text-right px-4 py-3">Margem</th>}
                   {company?.stock_enabled && <th className="text-right px-4 py-3">Estoque</th>}
                   <th className="text-right px-4 py-3">Ações</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((p) => (
-                  <tr key={p.id} className="border-t border-zinc-100 hover:bg-zinc-50">
-                    <td className="px-4 py-3 font-mono-num text-zinc-900">{p.code}</td>
-                    <td className="px-4 py-3 text-zinc-700">{p.description}</td>
-                    <td className="px-4 py-3 text-right font-mono-num">{fmtMoney(p.price)}</td>
-                    {company?.stock_enabled && <td className="px-4 py-3 text-right font-mono-num">{p.stock} {p.unit}</td>}
-                    <td className="px-4 py-3 text-right">
-                      <button data-testid={`edit-product-${p.id}`} onClick={() => openEdit(p)} className="w-8 h-8 rounded hover:bg-zinc-100 inline-grid place-items-center text-zinc-500 hover:text-zinc-900"><Pencil className="w-4 h-4" /></button>
-                      <button data-testid={`delete-product-${p.id}`} onClick={() => del(p.id)} className="ml-1 w-8 h-8 rounded hover:bg-red-50 inline-grid place-items-center text-zinc-500 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
-                    </td>
-                  </tr>
-                ))}
+                {filtered.map((p) => {
+                  const cost = Number(p.cost_price || 0);
+                  const price = Number(p.price || 0);
+                  const margin = cost > 0 && price > 0 ? ((price - cost) / price) * 100 : null;
+                  return (
+                    <tr key={p.id} className="border-t border-zinc-100 hover:bg-zinc-50">
+                      <td className="px-4 py-3 font-mono-num text-zinc-900">{p.code}</td>
+                      <td className="px-4 py-3 text-zinc-700">{p.description}</td>
+                      {!isVendedor && <td className="px-4 py-3 text-right font-mono-num text-zinc-500">{cost > 0 ? fmtMoney(cost) : "—"}</td>}
+                      <td className="px-4 py-3 text-right font-mono-num font-semibold">{fmtMoney(price)}</td>
+                      {!isVendedor && <td className="px-4 py-3 text-right font-mono-num text-xs"><span className={margin === null ? "text-zinc-400" : margin > 20 ? "text-emerald-600" : margin > 0 ? "text-amber-600" : "text-red-600"}>{margin === null ? "—" : `${margin.toFixed(1)}%`}</span></td>}
+                      {company?.stock_enabled && <td className="px-4 py-3 text-right font-mono-num">{p.stock} {p.unit}</td>}
+                      <td className="px-4 py-3 text-right">
+                        <button data-testid={`edit-product-${p.id}`} onClick={() => openEdit(p)} className="w-8 h-8 rounded hover:bg-zinc-100 inline-grid place-items-center text-zinc-500 hover:text-zinc-900"><Pencil className="w-4 h-4" /></button>
+                        <button data-testid={`delete-product-${p.id}`} onClick={() => del(p.id)} className="ml-1 w-8 h-8 rounded hover:bg-red-50 inline-grid place-items-center text-zinc-500 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

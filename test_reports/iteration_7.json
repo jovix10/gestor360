@@ -1,0 +1,38 @@
+{
+  "summary": "Backend-only testing of iteration 7 (Product.cost_price / preço de custo + preço de tabela with role-based rules). Created /app/backend/tests/test_iteration7.py with 16 tests — all PASSED. Verified owner create/update persists cost_price, vendedor cannot see it (key absent from GET /api/products), vendedor POST with cost_price=99 stored as 0.0, vendedor PUT preserves owner's cost_price while still updating price, gerente sees & sets cost_price, PUT on unknown id now returns 404, legacy product docs without the cost_price key load fine (default 0.0) and can be updated, and orcamento→PDF→convert flow plus /api/stats are unaffected. Also re-ran the iteration 6 regression suite: 36 passed / 3 skipped. Company code 'gestor360' / 'Empresa123' state preserved.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST/PUT /api/products", "issue": "Negative cost_price accepted (cost_price=-5 stored). No non-negative validation on price/cost_price/stock (ge=0 on Pydantic fields would fix)."},
+      {"endpoint": "PUT /api/products/{id}", "issue": "No duplicate-code check on update (POST has one), so two products in the same company can end up with the same code."},
+      {"endpoint": "DELETE /api/products/{id}", "issue": "Returns 200 {ok:true} for a non-existent id instead of 404 (pre-existing, consistent with clients/documents)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration7.py",
+    "/app/test_reports/pytest/it7_results.xml",
+    "/app/test_reports/pytest/it7_edge_findings.txt"
+  ],
+  "action_items": [
+    "Optional: add ge=0 constraints to Product.price / cost_price / stock to reject negative values.",
+    "Optional: add duplicate-code validation to PUT /api/products/{id}.",
+    "Optional: return 404 from DELETE /api/products/{id} when the product does not exist."
+  ],
+  "critical_code_review_comments": [
+    "_strip_cost_for_role mutates the dicts returned to the client only (motor returns fresh dicts), so it is safe; but it removes the key entirely for vendedor — frontend must handle an absent cost_price (Products.jsx already gates on isVendedor).",
+    "server.py is ~1235 lines; consider splitting routers (auth/products/documents/pdf) into modules before it grows further."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration7.py"],
+  "success_rate": {"backend": "100%", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Temporary vendedor (v7xxxxxx) and gerente (g7xxxxxx) users, TEST_ products, a TEST client and orcamento/venda documents — all deleted in test_zz_cleanup; assertions confirm no leftover TEST_ products or temp users.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Owner: netozincaovendas@gmail.com / Gestor360! (username 'admin'); Company two-step: code='gestor360' password='Empresa123' (verified still active via /api/auth/lookup-company)",
+  "context_for_next_testing_agent": "test_iteration7.py covers cost_price role rules end-to-end and self-cleans; safe to re-run. Frontend (Products.jsx custo/margem columns hidden for vendedor) was NOT tested — needs UI verification next. Company remains code='gestor360', password='Empresa123', name='Gestor360 Teste'.",
+  "rca_of_the_issue": "No functional defects found. Only input-validation gaps: Product model uses plain float fields without ge=0, and update_product lacks the unique-code check present in create_product."
+}

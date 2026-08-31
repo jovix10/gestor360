@@ -174,7 +174,8 @@ class Product(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     code: str
     description: str
-    price: float = 0.0
+    price: float = 0.0        # preço de tabela (venda)
+    cost_price: float = 0.0   # preço de custo (interno - owner/gerente only)
     stock: float = 0.0
     unit: str = "UN"
 
@@ -679,13 +680,21 @@ async def delete_client(client_id: str, user: dict = Depends(get_current_user)):
 
 
 # ============ PRODUCTS ============
-@api_router.get("/products", response_model=List[Product])
-async def list_products(user: dict = Depends(get_current_user)):
-    rows = await db.products.find({'company_id': user['company_id']}, {'_id': 0, 'company_id': 0}).to_list(10000)
+def _strip_cost_for_role(rows, user):
+    """Vendedor does not see cost_price."""
+    if user.get('role') == 'vendedor':
+        for r in rows:
+            r.pop('cost_price', None)
     return rows
 
 
-@api_router.post("/products", response_model=Product)
+@api_router.get("/products")
+async def list_products(user: dict = Depends(get_current_user)):
+    rows = await db.products.find({'company_id': user['company_id']}, {'_id': 0, 'company_id': 0}).to_list(10000)
+    return _strip_cost_for_role(rows, user)
+
+
+@api_router.post("/products")
 async def create_product(payload: Product, user: dict = Depends(get_current_user)):
     if not payload.id:
         payload.id = str(uuid.uuid4())
@@ -693,20 +702,29 @@ async def create_product(payload: Product, user: dict = Depends(get_current_user
     if exists:
         raise HTTPException(400, detail="Código de produto já existe")
     doc = payload.model_dump()
+    # vendedor não pode definir cost_price
+    if user.get('role') == 'vendedor':
+        doc['cost_price'] = 0.0
     doc['company_id'] = user['company_id']
     await db.products.insert_one(dict(doc))
     doc.pop('company_id', None)
-    return doc
+    return _strip_cost_for_role([doc], user)[0]
 
 
-@api_router.put("/products/{product_id}", response_model=Product)
+@api_router.put("/products/{product_id}")
 async def update_product(product_id: str, payload: Product, user: dict = Depends(get_current_user)):
+    existing = await db.products.find_one({'id': product_id, 'company_id': user['company_id']}, {'_id': 0})
+    if not existing:
+        raise HTTPException(404, "Produto não encontrado")
     payload.id = product_id
-    await db.products.update_one(
-        {'id': product_id, 'company_id': user['company_id']},
-        {'$set': {**payload.model_dump(), 'company_id': user['company_id']}},
-    )
-    return payload
+    doc = payload.model_dump()
+    doc['company_id'] = user['company_id']
+    # vendedor: preserva cost_price original (não permite alterar)
+    if user.get('role') == 'vendedor':
+        doc['cost_price'] = existing.get('cost_price', 0.0)
+    await db.products.update_one({'id': product_id, 'company_id': user['company_id']}, {'$set': doc})
+    doc.pop('company_id', None)
+    return _strip_cost_for_role([doc], user)[0]
 
 
 @api_router.delete("/products/{product_id}")

@@ -1,0 +1,1 @@
+POST /products accepts negative cost_price (-5)
