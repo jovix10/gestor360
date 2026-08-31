@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 5 backend-only testing of the company-code normalization bugfix (slugify parity between setup-company, company-login and lookup-company). Created /app/backend/tests/test_iteration5.py (23 tests): 22 passed, 1 failed (minor info-leak edge case in lookup-company). The reported user bug is FIXED: company-login now slugifies the input, so 'Gestor360', 'GESTOR360', ' gestor360 ' all authenticate against stored code 'gestor360'; 'Equipe Kirius' / 'EQUIPE KIRIUS' / 'equipe kirius' all resolve to 'equipe-kirius'. Setup+login round-trip with spaces ('Neto Materiais' -> 'neto-materiais') and with accents ('Néto Açaí') works when logging in with the RAW string. Also re-ran the full iteration4 regression suite: 41/41 passed (after fixing its credential-parsing regex which caused a module-level collection error).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/auth/lookup-company", "issue": "Codes that slugify to an empty string ('   ', '!!!', '---', '@@@') match the pending-setup company stored with code='' and return {found: true, name: 'Test User — Empresa', code: ''}. This leaks another tenant's company name and shows a bogus 'company found' state in the two-step login UI. Fix: if slugify(code) is empty (or len < 3), return {found: false} immediately; likewise guard company_login (currently it only 401s incidentally because password_hash is '')."},
+      {"endpoint": "POST /api/auth/setup-company", "issue": "slugify() replaces accented chars with '-' instead of transliterating, so 'Néto Açaí' becomes 'n-to-a-a' and 'Gestão' becomes 'gest-o'. Login parity still holds (both sides slugify), but the generated code shown to the user is ugly/confusing. Recommend unicodedata.normalize('NFKD', ...) ASCII-folding before the regex so 'Néto Açaí' -> 'neto-acai'."},
+      {"endpoint": "POST /api/auth/company-login", "issue": "By design 'gestor 360' -> 'gestor-360' (space becomes '-') and returns 401 since only 'gestor360' exists. Confirmed per spec, but note this remains a foot-gun: users who created a code without spaces but type it with a space still get 'Empresa não encontrada'. Consider also trying a space-stripped fallback lookup, or show the normalized code in the setup confirmation screen."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration5.py",
+    "/app/test_reports/pytest/iteration5.xml",
+    "/app/test_reports/pytest/iteration4_rerun.xml"
+  ],
+  "action_items": [
+    "Guard lookup-company (and company-login) against codes that slugify to '' so pending-setup companies with code='' are never matched — return {found: false} / 401.",
+    "Optional: ASCII-fold accents in slugify() so 'Néto Açaí' -> 'neto-acai' instead of 'n-to-a-a'.",
+    "Optional UX: after setup-company, surface the normalized code returned by the API ('code' field) to the owner so they know exactly what to type at login."
+  ],
+  "critical_code_review_comments": [
+    "slugify() is now correctly used at all three call sites (setup_company L445, company_login L358, lookup_company L468) — parity confirmed.",
+    "companies documents created by /auth/register and /auth/session use code='' as a sentinel; any query keyed on a normalized code must explicitly reject empty codes (root cause of the lookup-company leak).",
+    "/app/backend/server.py is 1179 lines — consider splitting auth, documents and PDF generation into separate modules."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration5.py",
+    "/app/backend/tests/test_iteration4.py"
+  ],
+  "success_rate": {"backend": "96% (22/23 new tests; 41/41 iteration4 regression)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "No permanent data created. Company 'gestor360' code was temporarily changed to 'neto-materiais' and an accented slug during the round-trip test, then restored to code='gestor360' / password='Empresa123' / name='Gestor360 Teste'. DB verified clean after run (3 companies, 3 users).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Owner: netozincaovendas@gmail.com / Gestor360! (username 'admin'). Company: code='gestor360' password='Empresa123'.",
+  "context_for_next_testing_agent": "Run backend suites with `cd /app/backend && python -m pytest tests/test_iteration5.py -q` (pytest.ini forces -n 2 --dist loadscope; use -n 0 for serial, NOT -p no:xdist). All iteration5 tests live in ONE class so loadscope keeps them on a single worker — do not split the setup/round-trip tests into another class or they will race with the login-variant tests and produce false 401 failures. test_iteration4.py credential regex now accepts 'Senha:' (pt-BR) in /app/memory/test_credentials.md. Known open failure: test_lookup_company_empty_slug (empty-slug matches the code='' pending company).",
+  "rca_of_the_issue": "Original bug: setup-company stored slugify(code) while company-login only did lower().strip(), so a code entered as 'Equipe Kirius' was stored as 'equipe-kirius' but looked up as 'equipe kirius' -> 401 'Empresa não encontrada ou senha inválida'. Fix (slugify at company_login + lookup_company) verified working for all case/space/whitespace variants. Residual defect: slugify('') / slugify('!!!') == '' collides with the code='' sentinel used for pending-setup companies, so lookup-company reports found=true for garbage input."
+}

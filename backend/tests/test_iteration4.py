@@ -34,7 +34,7 @@ STATE = {}
 def creds():
     content = Path("/app/memory/test_credentials.md").read_text(encoding="utf-8")
     email = re.search(r'(?im)^\s*(?:[-*]\s*)?(?:\*\*)?email(?:\*\*)?\s*:\s*`?([^`\s]+)', content)
-    pw = re.search(r'(?im)^\s*(?:[-*]\s*)?(?:\*\*)?password(?:\*\*)?\s*:\s*`?([^`\s]+)', content)
+    pw = re.search(r'(?im)^\s*(?:[-*]\s*)?(?:\*\*)?(?:password|senha)(?:\*\*)?\s*:\s*`?([^`\s]+)', content)
     if not email or not pw:
         pytest.skip("credentials not parseable")
     return email.group(1), pw.group(1)

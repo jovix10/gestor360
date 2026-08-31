@@ -14,6 +14,7 @@ import bcrypt
 import jwt as pyjwt
 import requests as http_requests
 import re
+import unicodedata
 from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -145,6 +146,12 @@ class ChangePasswordIn(BaseModel):
     new_password: str
 
 
+class ChangeCompanyCredentialsIn(BaseModel):
+    current_password: str
+    new_code: Optional[str] = None
+    new_password: Optional[str] = None
+
+
 class Client(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
@@ -247,6 +254,7 @@ def create_company_session(company_id: str) -> str:
 
 
 def slugify(text: str) -> str:
+    text = unicodedata.normalize('NFKD', text or '').encode('ascii', 'ignore').decode('ascii')
     text = text.lower().strip()
     text = re.sub(r'[^a-z0-9\-_]', '-', text)
     text = re.sub(r'-+', '-', text).strip('-')
@@ -355,7 +363,9 @@ async def owner_login(payload: LoginIn, response: Response):
 
 @api_router.post("/auth/company-login")
 async def company_login(payload: CompanyLoginIn, response: Response):
-    code = payload.code.lower().strip()
+    code = slugify(payload.code)
+    if not code:
+        raise HTTPException(401, "Empresa não encontrada ou senha inválida")
     company = await db.companies.find_one({'code': code}, {'_id': 0})
     if not company or not company.get('password_hash') or not verify_password(payload.password, company['password_hash']):
         raise HTTPException(401, "Empresa não encontrada ou senha inválida")
@@ -465,7 +475,10 @@ async def setup_company(payload: SetupCompanyIn, user: dict = Depends(get_curren
 @api_router.get("/auth/lookup-company")
 async def lookup_company(code: str):
     """Public endpoint — returns just the company name (for two-step login UX)."""
-    company = await db.companies.find_one({'code': code.lower().strip()}, {'_id': 0, 'name': 1, 'code': 1})
+    slug = slugify(code)
+    if len(slug) < 3:
+        return {'found': False}
+    company = await db.companies.find_one({'code': slug}, {'_id': 0, 'name': 1, 'code': 1})
     if not company:
         return {'found': False}
     return {'found': True, 'name': company.get('name', ''), 'code': company.get('code', '')}
@@ -602,6 +615,31 @@ async def update_company(payload: CompanyUpdateIn, user: dict = Depends(get_curr
     if update:
         await db.companies.update_one({'id': user['company_id']}, {'$set': update})
     return await get_company_of_user(user)
+
+
+@api_router.post("/company/change-credentials")
+async def change_company_credentials(payload: ChangeCompanyCredentialsIn, user: dict = Depends(get_current_user)):
+    require_roles(user, ['owner'])
+    company = await db.companies.find_one({'id': user['company_id']})
+    if not company or not verify_password(payload.current_password, company.get('password_hash', '')):
+        raise HTTPException(400, "Senha atual da empresa incorreta")
+    update = {}
+    if payload.new_code:
+        new_code = slugify(payload.new_code)
+        if len(new_code) < 3:
+            raise HTTPException(400, "Código muito curto (mínimo 3 caracteres)")
+        other = await db.companies.find_one({'code': new_code, 'id': {'$ne': user['company_id']}})
+        if other:
+            raise HTTPException(400, "Código já em uso por outra empresa")
+        update['code'] = new_code
+    if payload.new_password:
+        if len(payload.new_password) < 4:
+            raise HTTPException(400, "Nova senha muito curta")
+        update['password_hash'] = hash_password(payload.new_password)
+    if not update:
+        raise HTTPException(400, "Informe um novo código ou nova senha")
+    await db.companies.update_one({'id': user['company_id']}, {'$set': update})
+    return {'ok': True, 'code': update.get('code', company.get('code', ''))}
 
 
 # ============ CLIENTS ============

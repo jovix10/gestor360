@@ -1,0 +1,40 @@
+{
+  "summary": "Backend-only testing of iteration 6: new POST /api/company/change-credentials endpoint + slugify ASCII-fold hardening + empty-slug guards on lookup-company/company-login, plus a full regression sweep. Created /app/backend/tests/test_iteration6.py (39 tests) — all 39 PASS. Also re-ran prior suites test_iteration4.py + test_iteration5.py (64 tests) — all PASS. No 500s in backend logs. Company state restored to code='gestor360' / password='Empresa123' / name='Gestor360 Teste' and verified via company-login after teardown.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/company/change-credentials", "issue": "Duplicate-code check is a read-then-write (find_one then update_one) with no unique index on companies.code — two concurrent owners could claim the same code. Recommend a unique index on companies.code."},
+      {"endpoint": "POST /api/company/change-credentials", "issue": "Changing the company password does not invalidate outstanding company_session cookies (30-min JWT). A session obtained with the old password stays usable until expiry. Same for code change. Low severity, but worth noting."},
+      {"endpoint": "POST /api/company/change-credentials", "issue": "A code such as 'a-b' is accepted because it slugifies to exactly 3 chars ('a-b'). If the intent is >=3 alphanumeric characters, the min-length check should count alnum chars, not slug length. Currently matches the stated spec (<3 chars rejected), so reported as informational."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration6.py",
+    "/app/test_reports/pytest/iteration6.xml"
+  ],
+  "action_items": [
+    "Optional hardening: add a unique index on companies.code to close the duplicate-code race.",
+    "Optional: invalidate/rotate company_session tokens after a company password/code change.",
+    "Code review: /app/backend/server.py is 1216 lines — split into routers (auth, company, clients, products, documents, pdf, stats)."
+  ],
+  "critical_code_review_comments": [
+    "slugify() now correctly NFKD ASCII-folds — verified 'Néto Açaí' -> 'neto-acai' end-to-end (change-credentials response, lookup-company, company-login with the raw accented string).",
+    "change-credentials correctly leaves company.name untouched (verified via GET /api/company after the change) — unlike setup-company which overwrites name.",
+    "Empty/`falsy` new_code ('' or null) correctly falls through to the 'Informe um novo código ou nova senha' 400 branch; symbol-only codes ('!!!','@@@','---','   ') correctly hit the <3-char 400 branch.",
+    "GET /api/company and all list endpoints correctly exclude MongoDB _id; user payloads exclude password_hash.",
+    "/api/company/change-credentials duplicate check compares against slugified code, so 'Equipe Kirius' / 'EQUIPE  KIRIUS' are all rejected as duplicates of 'equipe-kirius' — good parity."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration6.py"],
+  "success_rate": {"backend": "100% (39/39 iteration-6 tests; 64/64 regression tests from iter 4+5)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Transient only: TEST_vendedor/TEST_gerente users (v6vend*/v6ger*), one TEST_ client, one TEST_ product, one orcamento document. All deleted in test_20_cleanup_test_data. Company mutated during tests then restored to gestor360/Empresa123/'Gestor360 Teste' by module-scoped teardown (verified).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Owner: netozincaovendas@gmail.com / Gestor360! (owner-login). Company two-step: code='gestor360' password='Empresa123', user 'admin' password='Gestor360!'.",
+  "context_for_next_testing_agent": "Iteration 6 verified all requested items: (a) 403 for gerente+vendedor on change-credentials, (b) 400 wrong current_password (old pw still works after), (c) 400 empty payload (3 variants), (d) 400 code slugifying to <3 chars, (e) 400 duplicate code incl. case/space variants of 'equipe-kirius', (f) success returns {ok:true, code:'<slug>'}, (g) password change: old pw -> 401, new pw -> 200, (h) code change: new code (+ accent/case/space variants) -> 200 and old code -> 401 + lookup-company found:false. Also verified auth/me reflects new code, code+password change together, and empty-slug guards on both lookup-company and company-login (incl. code=''). Regression on clients/products/documents/PDF(%PDF magic bytes)/stats/users for owner+gerente+vendedor passed, incl. vendedor doc scoping and 403s. NOTE: Product model requires 'code' and 'description' (not 'name'); DocumentIn uses 'doc_type' and 'lines' with fields code/description/quantity/unit_price/discount_pct — earlier test drafts using name/type/items got 422. Frontend (BrasilAPI CNPJ lookup + Empresa credentials tab) was NOT tested and still needs UI verification.",
+  "rca_of_the_issue": "No product defects found. The 3 initial test failures were test-authoring errors on my side: (1) 'a-b' slugifies to 3 chars so it is legitimately accepted; (2)/(3) wrong request schema for POST /api/products and POST /api/documents (used name/type/items instead of code+description / doc_type+lines) causing 422 and a cascading KeyError. Test file corrected; full suite then green."
+}

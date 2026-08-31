@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Pencil, Trash2, Search, Users, Loader2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Search, Users, Loader2, ScanSearch } from "lucide-react";
 import { toast } from "sonner";
 
 const empty = {
@@ -21,12 +21,39 @@ export default function Clients() {
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
   const [cepLoading, setCepLoading] = useState(false);
+  const [cnpjLoading, setCnpjLoading] = useState(false);
 
   const load = () => api.get("/clients").then(r => setRows(r.data));
   useEffect(() => { load(); }, []);
 
   const openNew = () => { setForm(empty); setEditing(null); setOpen(true); };
   const openEdit = (c) => { setForm({ ...empty, ...c }); setEditing(c.id); setOpen(true); };
+
+  const lookupCnpj = async () => {
+    const cnpj = String(form.document || "").replace(/\D/g, "");
+    if (cnpj.length !== 14) { toast.error("CNPJ deve ter 14 dígitos"); return; }
+    setCnpjLoading(true);
+    try {
+      const r = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
+      if (!r.ok) { toast.error("CNPJ não encontrado na Receita"); return; }
+      const d = await r.json();
+      setForm(f => ({
+        ...f,
+        name: d.razao_social || d.nome_fantasia || f.name,
+        cep: (d.cep || "").replace(/\D/g, "") || f.cep,
+        street: d.logradouro || f.street,
+        number: d.numero || f.number,
+        complement: d.complemento || f.complement,
+        district: d.bairro || f.district,
+        city: d.municipio || f.city,
+        state: d.uf || f.state,
+        phone: d.ddd_telefone_1 || f.phone,
+        email: d.email || f.email,
+      }));
+      toast.success("Dados da empresa preenchidos automaticamente");
+    } catch { toast.error("Erro ao consultar CNPJ"); }
+    finally { setCnpjLoading(false); }
+  };
 
   const lookupCep = async (raw) => {
     const cep = String(raw || "").replace(/\D/g, "");
@@ -125,11 +152,20 @@ export default function Clients() {
               <form onSubmit={save} className="space-y-5">
                 <section className="space-y-3">
                   <div className="text-xs uppercase tracking-widest text-zinc-500 font-semibold">Identificação</div>
-                  <div><Label>Nome / Razão Social *</Label><Input data-testid="client-name-input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div><Label>CPF / CNPJ</Label><Input data-testid="client-document-input" value={form.document} onChange={(e) => setForm({ ...form, document: e.target.value })} /></div>
-                    <div><Label>Inscrição Estadual</Label><Input data-testid="client-ie-input" value={form.ie} onChange={(e) => setForm({ ...form, ie: e.target.value })} placeholder="Isento se não houver" /></div>
+                  <div className="grid grid-cols-6 gap-3">
+                    <div className="col-span-4">
+                      <Label>CPF / CNPJ</Label>
+                      <Input data-testid="client-document-input" value={form.document} onChange={(e) => setForm({ ...form, document: e.target.value })} />
+                    </div>
+                    <div className="col-span-2 flex items-end">
+                      <Button type="button" onClick={lookupCnpj} disabled={cnpjLoading} data-testid="cnpj-lookup-btn" className="w-full h-10 bg-zinc-900 hover:bg-zinc-800 text-white font-semibold">
+                        {cnpjLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><ScanSearch className="w-4 h-4 mr-1" /> Buscar CNPJ</>}
+                      </Button>
+                    </div>
                   </div>
+                  <p className="text-xs text-zinc-500 -mt-2">Digite o CNPJ e clique em Buscar para preencher nome, endereço e contato automaticamente (via Receita Federal).</p>
+                  <div><Label>Nome / Razão Social *</Label><Input data-testid="client-name-input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+                  <div><Label>Inscrição Estadual</Label><Input data-testid="client-ie-input" value={form.ie} onChange={(e) => setForm({ ...form, ie: e.target.value })} placeholder="Isento se não houver" /></div>
                 </section>
 
                 <section className="space-y-3">

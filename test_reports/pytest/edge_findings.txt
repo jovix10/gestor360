@@ -3,5 +3,3 @@ vendedor can CREATE products
 PUT /products/{id} returns 200 for unknown id (no 404)
 DELETE /clients/{id} returns 200 for unknown id (no 404)
 DELETE /documents/{id} returns 200 for unknown id (no 404)
-POST /users allows creating a second role='owner'
-extra owner user cannot be removed via API (cleaned via DB)
