@@ -94,12 +94,16 @@ export default function Layout() {
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         try {
-          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&zoom=10`, {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&zoom=13&addressdetails=1`, {
             headers: { "Accept-Language": "pt-BR" },
           });
           const d = await r.json();
-          const city = d.address?.city || d.address?.town || d.address?.village || d.address?.state || d.display_name;
-          if (city) setLocation(city);
+          const a = d.address || {};
+          const city = a.city || a.town || a.village || a.municipality || a.county || a.suburb || "";
+          const uf = (a["ISO3166-2-lvl4"] || "").replace("BR-", "") || a.state_code || a.state || "";
+          if (city && uf) setLocation(`${city}/${uf}`);
+          else if (city) setLocation(city);
+          else if (uf) setLocation(uf);
         } catch {}
       },
       () => {},
