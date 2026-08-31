@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 3 backend-only testing of Gestor360. Added /app/backend/tests/test_iteration3.py (27 tests) covering Client structured address + IE persistence (POST/GET/PUT), Company IE (PUT/GET), Document payments persistence for all 6 methods incl. 12x credito, empty-description lines, the NEW PUT /api/documents/{id} (partial update of lines/payments/notes/client_id, metadata preservation, 400 invalid client, 404 unknown doc, 401 unauth, empty-body no-op), PDF rendering (200 + application/pdf + %PDF) for a doc with payments and structured client address, convert orcamento->venda, and regression on /clients /products /documents /stats /company /. Ran full suite (backend_test.py + test_iteration3.py): 46 passed, 1 failed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/documents/{id}/convert", "issue": "convert_document builds new_doc without a 'payments' key, so the created venda document has no payments field at all (not even []). GET /api/documents/{id} for a converted venda therefore omits 'payments', which can break the frontend edit-mode (?id=) payment tab that expects the array. Fix: add 'payments': src.get('payments', []) (or []) in the new_doc dict."},
+      {"endpoint": "PUT /api/clients/{id}", "issue": "No existence check — updating a non-existent client id silently returns 200 with the echoed payload instead of 404. Also returns the request payload rather than the persisted DB document."},
+      {"endpoint": "PUT /api/documents/{id}", "issue": "No validation that payment amounts sum to document total and no bound on installments (accepts installments > 12 or 0/negative for credito). Business rule enforcement is frontend-only."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Add 'payments': src.get('payments', []) to the new_doc built in convert_document so converted vendas always expose the payments array.",
+    "Optional: return 404 from PUT /api/clients/{id} when the client does not exist and return the persisted document."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 858 lines — split into routers (auth, clients, products, documents, pdf) for maintainability.",
+    "convert_document constructs the venda dict manually instead of using the Document model, which is exactly why the new 'payments' field was missed; build it via Document(...).model_dump() to stay in sync with the model.",
+    "PaymentPart.method is a plain str, not a Literal/Enum — arbitrary methods like 'bitcoin' are accepted and silently stored (PDF then prints the raw value). Tighten to Literal['pix','dinheiro','credito','debito','boleto','transferencia'].",
+    "PaymentPart.installments has no ge=1/le=12 constraint despite the 1-12 parcelas requirement."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration3.py"],
+  "success_rate": {"backend": "98% (46/47 tests)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "All test data prefixed TEST_ (clients, products, documents) and deleted in module teardown; company IE restored to its original value after the IE test.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "netozincaovendas@gmail.com / Gestor360! (from /app/memory/test_credentials.md) — JWT login + Bearer flow verified working",
+  "context_for_next_testing_agent": "Backend suites live at /app/backend/tests/backend_test.py (iteration 2) and /app/backend/tests/test_iteration3.py (iteration 3). Run with `cd /app/backend && python -m pytest tests/ -v`. Note pytest.ini uses xdist, so tests must generate unique product codes (uuid suffix) to avoid duplicate-code 400s across workers. Only known open failure: TestConvertWithPayments::test_converted_venda_has_payments_key (convert omits payments key). Frontend (QuoteBuilder edit mode, ViaCEP, payment tab, client/product suggestion dropdowns) has NOT been tested yet.",
+  "rca_of_the_issue": "convert_document (server.py ~line 525) hand-builds the new venda dict with a fixed set of keys and was not updated when PaymentPart/payments was added to the Document model. Reproduce: create an orcamento with payments, POST /api/documents/{id}/convert, then GET the new doc id — response has no 'payments' key. Mitigation: include payments (copied or empty list) or construct via the Document pydantic model."
+}

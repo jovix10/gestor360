@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, fmtMoney, fmtDateTime } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileText, Download, Repeat2, Trash2, Plus, ScrollText } from "lucide-react";
+import { Download, Repeat2, Trash2, Plus, ScrollText, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Documents() {
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState("all");
+  const navigate = useNavigate();
 
   const load = () => api.get("/documents").then(r => setRows(r.data));
   useEffect(() => { load(); }, []);
@@ -113,11 +114,12 @@ export default function Documents() {
                       </td>
                       <td className="px-4 py-3 text-right font-mono-num font-semibold">{fmtMoney(d.total)}</td>
                       <td className="px-4 py-3 text-right">
-                        <button data-testid={`pdf-${d.id}`} onClick={() => download(d.id)} className="w-8 h-8 rounded hover:bg-zinc-100 inline-grid place-items-center text-zinc-500 hover:text-zinc-900" title="Baixar PDF"><Download className="w-4 h-4" /></button>
+                        <button data-testid={`edit-${d.id}`} onClick={() => navigate(`/orcamento?id=${d.id}`)} className="w-8 h-8 rounded hover:bg-zinc-100 inline-grid place-items-center text-zinc-500 hover:text-zinc-900" title="Editar"><Pencil className="w-4 h-4" /></button>
+                        <button data-testid={`pdf-${d.id}`} onClick={() => download(d.id)} className="ml-1 w-8 h-8 rounded hover:bg-zinc-100 inline-grid place-items-center text-zinc-500 hover:text-zinc-900" title="Baixar PDF"><Download className="w-4 h-4" /></button>
                         {d.doc_type === "orcamento" && (
-                          <button data-testid={`convert-${d.id}`} onClick={() => convert(d.id)} className="w-8 h-8 rounded hover:bg-[#FDF0EC] inline-grid place-items-center text-zinc-500 hover:text-[#F05D23]" title="Converter em venda"><Repeat2 className="w-4 h-4" /></button>
+                          <button data-testid={`convert-${d.id}`} onClick={() => convert(d.id)} className="ml-1 w-8 h-8 rounded hover:bg-[#FDF0EC] inline-grid place-items-center text-zinc-500 hover:text-[#F05D23]" title="Converter em venda"><Repeat2 className="w-4 h-4" /></button>
                         )}
-                        <button data-testid={`del-${d.id}`} onClick={() => del(d.id)} className="w-8 h-8 rounded hover:bg-red-50 inline-grid place-items-center text-zinc-500 hover:text-red-600" title="Excluir"><Trash2 className="w-4 h-4" /></button>
+                        <button data-testid={`del-${d.id}`} onClick={() => del(d.id)} className="ml-1 w-8 h-8 rounded hover:bg-red-50 inline-grid place-items-center text-zinc-500 hover:text-red-600" title="Excluir"><Trash2 className="w-4 h-4" /></button>
                       </td>
                     </tr>
                   );
@@ -142,7 +144,8 @@ export default function Documents() {
                     </div>
                     <div className="font-mono-num font-bold text-lg">{fmtMoney(d.total)}</div>
                   </div>
-                  <div className="mt-3 flex gap-2 border-t border-zinc-100 pt-3">
+                  <div className="mt-3 flex gap-2 border-t border-zinc-100 pt-3 flex-wrap">
+                    <Button size="sm" variant="outline" onClick={() => navigate(`/orcamento?id=${d.id}`)}><Pencil className="w-3.5 h-3.5 mr-1" />Editar</Button>
                     <Button size="sm" variant="outline" onClick={() => download(d.id)}><Download className="w-3.5 h-3.5 mr-1" />PDF</Button>
                     {d.doc_type === "orcamento" && <Button size="sm" variant="outline" onClick={() => convert(d.id)}><Repeat2 className="w-3.5 h-3.5 mr-1" />Converter</Button>}
                     <Button size="sm" variant="ghost" className="text-red-600 ml-auto" onClick={() => del(d.id)}><Trash2 className="w-3.5 h-3.5" /></Button>

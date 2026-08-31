@@ -67,6 +67,7 @@ class SessionIn(BaseModel):
 class Company(BaseModel):
     name: str = ""
     cnpj: str = ""
+    ie: str = ""  # Inscrição Estadual
     address: str = ""
     phone: str = ""
     email: str = ""
@@ -78,9 +79,17 @@ class Client(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
     document: str = ""  # CPF/CNPJ
+    ie: str = ""        # Inscrição Estadual
     email: str = ""
     phone: str = ""
-    address: str = ""
+    cep: str = ""
+    street: str = ""
+    number: str = ""
+    complement: str = ""
+    district: str = ""
+    city: str = ""
+    state: str = ""
+    address: str = ""   # legacy free text
     notes: str = ""
 
 
@@ -96,18 +105,16 @@ class Product(BaseModel):
 class DocLine(BaseModel):
     product_id: Optional[str] = None
     code: str = ""
-    description: str
+    description: str = ""
     quantity: float = 1
     unit_price: float = 0
     discount_pct: float = 0
 
-    @property
-    def gross(self):
-        return self.quantity * self.unit_price
 
-    @property
-    def net(self):
-        return self.gross * (1 - self.discount_pct / 100)
+class PaymentPart(BaseModel):
+    method: str = "pix"  # pix, dinheiro, credito, debito, boleto, transferencia
+    amount: float = 0.0
+    installments: int = 1
 
 
 class Document(BaseModel):
@@ -116,6 +123,7 @@ class Document(BaseModel):
     number: int = 0
     client_id: str
     lines: List[DocLine] = []
+    payments: List[PaymentPart] = []
     notes: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     valid_until: Optional[datetime] = None  # 72h for orcamentos
@@ -127,7 +135,15 @@ class DocumentIn(BaseModel):
     doc_type: Literal["orcamento", "venda"] = "orcamento"
     client_id: str
     lines: List[DocLine] = []
+    payments: List[PaymentPart] = []
     notes: str = ""
+
+
+class DocumentUpdate(BaseModel):
+    client_id: Optional[str] = None
+    lines: Optional[List[DocLine]] = None
+    payments: Optional[List[PaymentPart]] = None
+    notes: Optional[str] = None
 
 
 # ============ AUTH ============
@@ -444,6 +460,7 @@ async def create_document(payload: DocumentIn, user: dict = Depends(get_current_
         number=number,
         client_id=payload.client_id,
         lines=payload.lines,
+        payments=payload.payments,
         notes=payload.notes,
         created_at=now,
         valid_until=(now + timedelta(hours=72)) if payload.doc_type == 'orcamento' else None,
@@ -473,6 +490,29 @@ async def get_document(doc_id: str, user: dict = Depends(get_current_user)):
     return doc
 
 
+@api_router.put("/documents/{doc_id}")
+async def update_document(doc_id: str, payload: DocumentUpdate, user: dict = Depends(get_current_user)):
+    doc = await db.documents.find_one({'id': doc_id, 'user_id': user['user_id']}, {'_id': 0})
+    if not doc:
+        raise HTTPException(404, "Documento não encontrado")
+    update = {}
+    if payload.client_id is not None:
+        cli = await db.clients.find_one({'id': payload.client_id, 'user_id': user['user_id']})
+        if not cli:
+            raise HTTPException(400, "Cliente inválido")
+        update['client_id'] = payload.client_id
+    if payload.lines is not None:
+        update['lines'] = [l.model_dump() for l in payload.lines]
+    if payload.payments is not None:
+        update['payments'] = [p.model_dump() for p in payload.payments]
+    if payload.notes is not None:
+        update['notes'] = payload.notes
+    if update:
+        await db.documents.update_one({'id': doc_id, 'user_id': user['user_id']}, {'$set': update})
+    updated = await db.documents.find_one({'id': doc_id, 'user_id': user['user_id']}, {'_id': 0, 'user_id': 0})
+    return updated
+
+
 @api_router.post("/documents/{doc_id}/convert")
 async def convert_document(doc_id: str, user: dict = Depends(get_current_user)):
     src = await db.documents.find_one({'id': doc_id, 'user_id': user['user_id']}, {'_id': 0})
@@ -488,6 +528,7 @@ async def convert_document(doc_id: str, user: dict = Depends(get_current_user)):
         'number': number,
         'client_id': src['client_id'],
         'lines': src.get('lines', []),
+        'payments': src.get('payments', []),
         'notes': src.get('notes', ''),
         'created_at': now.isoformat(),
         'valid_until': None,
@@ -548,6 +589,8 @@ def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
 
     header_left.append(Spacer(1, 4))
     header_left.append(Paragraph(f"CNPJ: {company.get('cnpj', '—')}", small))
+    if company.get('ie'):
+        header_left.append(Paragraph(f"IE: {company['ie']}", small))
     header_left.append(Paragraph(company.get('address', ''), small))
     header_left.append(Paragraph(f"Tel: {company.get('phone', '')}   {company.get('email', '')}", small))
 
@@ -582,12 +625,26 @@ def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
     # CLIENT BLOCK
     story.append(Paragraph("CLIENTE", label))
     story.append(Spacer(1, 4))
+    # build structured address if present
+    parts = []
+    if client.get('street'):
+        s = client['street']
+        if client.get('number'): s += f", {client['number']}"
+        if client.get('complement'): s += f" — {client['complement']}"
+        parts.append(s)
+    if client.get('district'): parts.append(client['district'])
+    if client.get('city'):
+        parts.append(f"{client['city']}/{client.get('state','')}" if client.get('state') else client['city'])
+    if client.get('cep'): parts.append(f"CEP {client['cep']}")
+    full_address = " · ".join(parts) if parts else (client.get('address') or '—')
+
     client_rows = [
         [Paragraph("<b>Nome</b>", small), Paragraph(client.get('name', '—'), body),
          Paragraph("<b>Documento</b>", small), Paragraph(client.get('document', '—'), body)],
-        [Paragraph("<b>Endereço</b>", small), Paragraph(client.get('address', '—'), body),
+        [Paragraph("<b>Endereço</b>", small), Paragraph(full_address, body),
          Paragraph("<b>Telefone</b>", small), Paragraph(client.get('phone', '—'), body)],
-        [Paragraph("<b>Email</b>", small), Paragraph(client.get('email', '—'), body), '', ''],
+        [Paragraph("<b>Email</b>", small), Paragraph(client.get('email', '—'), body),
+         Paragraph("<b>IE</b>", small), Paragraph(client.get('ie', '—'), body)],
     ]
     ct = Table(client_rows, colWidths=[2.5*cm, 7*cm, 2.5*cm, 6*cm])
     ct.setStyle(TableStyle([
@@ -674,6 +731,37 @@ def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
         story.append(Spacer(1, 16))
         story.append(Paragraph("OBSERVAÇÕES", label))
         story.append(Paragraph(doc['notes'], body))
+
+    # PAYMENT SECTION
+    if doc.get('payments'):
+        story.append(Spacer(1, 14))
+        story.append(Paragraph("CONDIÇÕES DE PAGAMENTO", label))
+        story.append(Spacer(1, 4))
+        method_labels = {
+            'pix': 'PIX',
+            'dinheiro': 'Dinheiro',
+            'credito': 'Cartão de Crédito',
+            'debito': 'Cartão de Débito',
+            'boleto': 'Boleto',
+            'transferencia': 'Transferência',
+        }
+        pay_data = []
+        for p in doc['payments']:
+            m = method_labels.get(p.get('method', ''), p.get('method', ''))
+            amount = float(p.get('amount', 0))
+            inst = int(p.get('installments', 1) or 1)
+            detail = ''
+            if p.get('method') == 'credito' and inst > 1:
+                per = amount / inst
+                detail = f" · {inst}x de {_fmt_money(per)}"
+            pay_data.append([Paragraph(m, body), Paragraph(_fmt_money(amount) + detail, body)])
+        pay_table = Table(pay_data, colWidths=[10*cm, 7.5*cm])
+        pay_table.setStyle(TableStyle([
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('LINEBELOW', (0, 0), (-1, -1), 0.3, colors.HexColor('#E4E4E7')),
+        ]))
+        story.append(pay_table)
 
     story.append(Spacer(1, 24))
     footer = Paragraph(f"<font color='#A1A1AA'>Documento gerado por Gestor360 · {datetime.now(timezone.utc).strftime('%d/%m/%Y')}</font>", small)

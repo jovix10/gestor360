@@ -7,7 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Building2, Upload } from "lucide-react";
 
-const empty = { name: "", cnpj: "", address: "", phone: "", email: "", logo_data_url: "", stock_enabled: false };
+const empty = { name: "", cnpj: "", ie: "", address: "", phone: "", email: "", logo_data_url: "", stock_enabled: false };
 
 export default function Settings() {
   const [form, setForm] = useState(empty);
@@ -70,9 +70,12 @@ export default function Settings() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div><Label>CNPJ</Label><Input data-testid="company-cnpj-input" value={form.cnpj} onChange={(e) => setForm({ ...form, cnpj: e.target.value })} className="mt-1" /></div>
-              <div><Label>Telefone</Label><Input data-testid="company-phone-input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="mt-1" /></div>
+              <div><Label>Inscrição Estadual</Label><Input data-testid="company-ie-input" value={form.ie || ""} onChange={(e) => setForm({ ...form, ie: e.target.value })} className="mt-1" placeholder="Isento se não houver" /></div>
             </div>
-            <div><Label>Email</Label><Input data-testid="company-email-input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1" /></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><Label>Telefone</Label><Input data-testid="company-phone-input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="mt-1" /></div>
+              <div><Label>Email</Label><Input data-testid="company-email-input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1" /></div>
+            </div>
             <div><Label>Endereço</Label><Input data-testid="company-address-input" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} className="mt-1" /></div>
           </div>
         </div>
