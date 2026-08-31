@@ -599,8 +599,8 @@ def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
     story.append(ct)
     story.append(Spacer(1, 14))
 
-    # LINES TABLE
-    header_row = ['Cód.', 'Descrição', 'Qtd.', 'Valor Unit.', 'Desc %', 'Bruto', 'Líquido']
+    # LINES TABLE (client-facing: no % column)
+    header_row = ['Cód.', 'Descrição', 'Qtd.', 'Valor Unit.', 'Bruto', 'Líquido']
     lines = doc.get('lines', [])
     total_gross = 0.0
     total_disc = 0.0
@@ -621,12 +621,11 @@ def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
             line.get('description', '') or '',
             f"{qty:g}",
             _fmt_money(price),
-            f"{disc:g}%",
             _fmt_money(gross),
             _fmt_money(net),
         ])
 
-    table = Table(data, colWidths=[1.6*cm, 6.4*cm, 1.5*cm, 2.4*cm, 1.5*cm, 2.3*cm, 2.3*cm], repeatRows=1)
+    table = Table(data, colWidths=[1.8*cm, 7.4*cm, 1.8*cm, 2.6*cm, 2.5*cm, 2.5*cm], repeatRows=1)
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), DARK),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),

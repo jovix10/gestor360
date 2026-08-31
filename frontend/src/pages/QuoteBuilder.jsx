@@ -60,6 +60,20 @@ export default function QuoteBuilder() {
     if (p) applyProduct(idx, p);
   };
 
+  // If the user overrides unit_price below the list price of a linked product,
+  // convert the difference into a discount percentage automatically.
+  const onPriceBlur = (idx, val) => {
+    const line = lines[idx];
+    if (!line?.product_id) return;
+    const p = productMap[line.product_id];
+    if (!p) return;
+    const typed = Number(val);
+    const list = Number(p.price);
+    if (!typed || !list || typed >= list) return;
+    const pct = Math.round((1 - typed / list) * 10000) / 100;
+    updateLine(idx, { unit_price: list, discount_pct: pct });
+  };
+
   const addLine = (focusIdx) => {
     setLines((cur) => {
       const next = [...cur, emptyLine()];
@@ -172,12 +186,12 @@ export default function QuoteBuilder() {
               <SelectValue placeholder="Selecione o cliente" />
             </SelectTrigger>
             <SelectContent>
-              {clients.map(c => (
+              {clients.filter(c => !!c.id).map(c => (
                 <SelectItem key={c.id} value={c.id} data-testid={`client-option-${c.id}`}>
                   {c.name} {c.document && `· ${c.document}`}
                 </SelectItem>
               ))}
-              {clients.length === 0 && <div className="px-3 py-6 text-sm text-zinc-500 text-center">Nenhum cliente. Cadastre em Clientes.</div>}
+              {clients.filter(c => !!c.id).length === 0 && <div className="px-3 py-6 text-sm text-zinc-500 text-center">Nenhum cliente. Cadastre em Clientes.</div>}
             </SelectContent>
           </Select>
           {docType === "orcamento" && (
@@ -257,6 +271,7 @@ export default function QuoteBuilder() {
                         type="number" step="0.01" min="0"
                         value={l.unit_price}
                         onChange={(e) => updateLine(idx, { unit_price: e.target.value })}
+                        onBlur={(e) => onPriceBlur(idx, e.target.value)}
                         onKeyDown={(e) => onKeyDown(idx, "unit_price", e)}
                       />
                     </td>
@@ -299,7 +314,7 @@ export default function QuoteBuilder() {
                 </div>
                 <div><Label className="text-xs">Descrição</Label><Input value={l.description} onChange={(e) => updateLine(idx, { description: e.target.value })} /></div>
                 <div className="grid grid-cols-2 gap-2">
-                  <div><Label className="text-xs">Valor</Label><Input type="number" step="0.01" value={l.unit_price} onChange={(e) => updateLine(idx, { unit_price: e.target.value })} /></div>
+                  <div><Label className="text-xs">Valor</Label><Input type="number" step="0.01" value={l.unit_price} onBlur={(e) => onPriceBlur(idx, e.target.value)} onChange={(e) => updateLine(idx, { unit_price: e.target.value })} /></div>
                   <div><Label className="text-xs">Desc. %</Label><Input type="number" step="0.01" value={l.discount_pct} onChange={(e) => updateLine(idx, { discount_pct: e.target.value })} /></div>
                 </div>
                 <div className="text-right font-mono-num font-semibold">{fmtMoney(net)}</div>
