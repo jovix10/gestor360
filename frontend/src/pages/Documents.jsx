@@ -23,7 +23,8 @@ export default function Documents() {
 
   const download = async (id) => {
     try {
-      const res = await api.get(`/documents/${id}/pdf`, { responseType: "blob" });
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+      const res = await api.get(`/documents/${id}/pdf?tz=${encodeURIComponent(tz)}`, { responseType: "blob" });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement("a");
       a.href = url;

@@ -37,7 +37,7 @@ export const computeLineNet = (line) => {
   return gross * (1 - Number(line.discount_pct || 0) / 100);
 };
 
-export const computeTotals = (lines) => {
+export const computeTotals = (lines, opts = {}) => {
   let gross = 0, disc = 0;
   for (const l of lines || []) {
     const g = Number(l.quantity || 0) * Number(l.unit_price || 0);
@@ -45,5 +45,10 @@ export const computeTotals = (lines) => {
     gross += g;
     disc += (g - n);
   }
-  return { gross, disc, net: gross - disc };
+  const lineNet = gross - disc;
+  const gpct = Number(opts.global_discount_pct || 0);
+  const gamt = Number(opts.global_discount_amount || 0);
+  const globalDisc = lineNet * (gpct / 100) + gamt;
+  const net = Math.max(lineNet - globalDisc, 0);
+  return { gross, disc, lineNet, globalDisc, net };
 };

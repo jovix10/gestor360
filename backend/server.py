@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Literal
 import uuid
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 import bcrypt
 import jwt as pyjwt
 import requests as http_requests
@@ -193,6 +194,7 @@ class PaymentPart(BaseModel):
     method: str = "pix"
     amount: float = 0.0
     installments: int = 1
+    boleto_days: List[int] = []  # e.g. [30, 60, 90] - dias após emissão
 
 
 class Document(BaseModel):
@@ -202,6 +204,8 @@ class Document(BaseModel):
     client_id: str
     lines: List[DocLine] = []
     payments: List[PaymentPart] = []
+    global_discount_pct: float = 0.0
+    global_discount_amount: float = 0.0
     notes: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     valid_until: Optional[datetime] = None
@@ -215,6 +219,8 @@ class DocumentIn(BaseModel):
     client_id: str
     lines: List[DocLine] = []
     payments: List[PaymentPart] = []
+    global_discount_pct: float = 0.0
+    global_discount_amount: float = 0.0
     notes: str = ""
 
 
@@ -222,6 +228,8 @@ class DocumentUpdate(BaseModel):
     client_id: Optional[str] = None
     lines: Optional[List[DocLine]] = None
     payments: Optional[List[PaymentPart]] = None
+    global_discount_pct: Optional[float] = None
+    global_discount_amount: Optional[float] = None
     notes: Optional[str] = None
 
 
@@ -773,11 +781,14 @@ async def list_documents(user: dict = Depends(get_current_user)):
         r['client_name'] = c.get('name', '—')
         creator = users.get(r.get('created_by'), {})
         r['created_by_name'] = creator.get('name', '')
-        total = 0.0
+        line_total = 0.0
         for line in r.get('lines', []):
             gross = float(line.get('quantity', 0)) * float(line.get('unit_price', 0))
-            total += gross * (1 - float(line.get('discount_pct', 0)) / 100)
-        r['total'] = round(total, 2)
+            line_total += gross * (1 - float(line.get('discount_pct', 0)) / 100)
+        gpct = float(r.get('global_discount_pct', 0) or 0)
+        gamt = float(r.get('global_discount_amount', 0) or 0)
+        final_total = line_total * (1 - gpct / 100) - gamt
+        r['total'] = round(max(final_total, 0), 2)
     return rows
 
 
@@ -794,6 +805,8 @@ async def create_document(payload: DocumentIn, user: dict = Depends(get_current_
         client_id=payload.client_id,
         lines=payload.lines,
         payments=payload.payments,
+        global_discount_pct=payload.global_discount_pct,
+        global_discount_amount=payload.global_discount_amount,
         notes=payload.notes,
         created_at=now,
         valid_until=(now + timedelta(hours=72)) if payload.doc_type == 'orcamento' else None,
@@ -840,6 +853,10 @@ async def update_document(doc_id: str, payload: DocumentUpdate, user: dict = Dep
         update['lines'] = [l.model_dump() for l in payload.lines]
     if payload.payments is not None:
         update['payments'] = [p.model_dump() for p in payload.payments]
+    if payload.global_discount_pct is not None:
+        update['global_discount_pct'] = payload.global_discount_pct
+    if payload.global_discount_amount is not None:
+        update['global_discount_amount'] = payload.global_discount_amount
     if payload.notes is not None:
         update['notes'] = payload.notes
     if update:
@@ -898,7 +915,29 @@ def _fmt_money(v: float) -> str:
     return f"R$ {v:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
 
-def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
+def _valid_tz(tz_name: str) -> bool:
+    try:
+        ZoneInfo(tz_name)
+        return True
+    except Exception:
+        return False
+
+
+def _to_local(dt, tz_name: str = "America/Sao_Paulo"):
+    if not dt:
+        return None
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("America/Sao_Paulo")
+    if isinstance(dt, str):
+        dt = datetime.fromisoformat(dt)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(tz)
+
+
+def _build_pdf(doc: dict, company: dict, client: dict, tz_name: str = "America/Sao_Paulo") -> BytesIO:
     buf = BytesIO()
     pdf = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm, topMargin=1.2*cm, bottomMargin=1.5*cm)
     styles = getSampleStyleSheet()
@@ -932,15 +971,11 @@ def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
     header_right = []
     header_right.append(Paragraph(f"<b>{doc_type_label}</b>", doc_title))
     header_right.append(Paragraph(f"Nº {doc['number']:06d}", body))
-    created = doc['created_at']
-    if isinstance(created, str):
-        created = datetime.fromisoformat(created)
-    header_right.append(Paragraph(f"Emissão: {created.strftime('%d/%m/%Y %H:%M')}", small))
+    created_local = _to_local(doc.get('created_at'), tz_name)
+    header_right.append(Paragraph(f"Emissão: {created_local.strftime('%d/%m/%Y %H:%M')}", small))
     if doc.get('valid_until'):
-        vu = doc['valid_until']
-        if isinstance(vu, str):
-            vu = datetime.fromisoformat(vu)
-        header_right.append(Paragraph(f"Validade: {vu.strftime('%d/%m/%Y %H:%M')}", small))
+        vu_local = _to_local(doc['valid_until'], tz_name)
+        header_right.append(Paragraph(f"Validade: {vu_local.strftime('%d/%m/%Y %H:%M')}", small))
 
     header_table = Table([[header_left, header_right]], colWidths=[11*cm, 6.5*cm])
     header_table.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('ALIGN', (1, 0), (1, 0), 'RIGHT')]))
@@ -1028,19 +1063,30 @@ def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
 
     totals_data = [
         ['Subtotal Bruto', _fmt_money(total_gross)],
-        ['Desconto Total', f"- {_fmt_money(total_disc)}"],
-        ['TOTAL LÍQUIDO', _fmt_money(total_net)],
+        ['Desconto nos itens', f"- {_fmt_money(total_disc)}"],
     ]
+    line_net = total_net
+    gpct = float(doc.get('global_discount_pct', 0) or 0)
+    gamt = float(doc.get('global_discount_amount', 0) or 0)
+    global_disc_value = line_net * (gpct / 100) + gamt
+    final_total = max(line_net - global_disc_value, 0)
+    if gpct > 0 or gamt > 0:
+        label_gd = 'Desconto no total'
+        if gpct > 0 and gamt == 0:
+            label_gd = f'Desconto no total ({gpct:g}%)'
+        totals_data.append([label_gd, f"- {_fmt_money(global_disc_value)}"])
+    totals_data.append(['TOTAL LÍQUIDO', _fmt_money(final_total)])
+    total_rows = len(totals_data)
     tot = Table(totals_data, colWidths=[10*cm, 4.5*cm])
     tot.setStyle(TableStyle([
         ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
         ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('TEXTCOLOR', (0, 0), (-1, 1), GRAY),
-        ('FONTNAME', (0, 2), (-1, 2), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 2), (-1, 2), 13),
-        ('TEXTCOLOR', (0, 2), (-1, 2), DARK),
-        ('BACKGROUND', (0, 2), (-1, 2), colors.HexColor('#FDF0EC')),
-        ('LINEABOVE', (0, 2), (-1, 2), 1.5, ORANGE),
+        ('TEXTCOLOR', (0, 0), (-1, total_rows - 2), GRAY),
+        ('FONTNAME', (0, total_rows - 1), (-1, total_rows - 1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, total_rows - 1), (-1, total_rows - 1), 13),
+        ('TEXTCOLOR', (0, total_rows - 1), (-1, total_rows - 1), DARK),
+        ('BACKGROUND', (0, total_rows - 1), (-1, total_rows - 1), colors.HexColor('#FDF0EC')),
+        ('LINEABOVE', (0, total_rows - 1), (-1, total_rows - 1), 1.5, ORANGE),
         ('TOPPADDING', (0, 0), (-1, -1), 6),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ('RIGHTPADDING', (0, 0), (-1, -1), 12),
@@ -1068,6 +1114,17 @@ def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
             if p.get('method') == 'credito' and inst > 1:
                 per = amount / inst
                 detail = f" · {inst}x de {_fmt_money(per)}"
+            if p.get('method') == 'boleto' and p.get('boleto_days'):
+                days = [int(d) for d in p['boleto_days'] if int(d) > 0]
+                if days:
+                    n = len(days)
+                    per = amount / n
+                    created_dt = _to_local(doc.get('created_at'), tz_name)
+                    parcelas = []
+                    for i, d in enumerate(days, 1):
+                        due = created_dt + timedelta(days=d)
+                        parcelas.append(f"{i}ª/{due.strftime('%d/%m/%Y')} — {_fmt_money(per)}")
+                    detail = f" · {n}x de {_fmt_money(per)}<br/><font size='8' color='#71717A'>{'  ·  '.join(parcelas)}</font>"
             pay_data.append([Paragraph(m, body), Paragraph(_fmt_money(amount) + detail, body)])
         pay_table = Table(pay_data, colWidths=[10*cm, 7.5*cm])
         pay_table.setStyle(TableStyle([
@@ -1078,7 +1135,8 @@ def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
         story.append(pay_table)
 
     story.append(Spacer(1, 24))
-    footer = Paragraph(f"<font color='#A1A1AA'>Documento gerado por Gestor360 · {datetime.now(timezone.utc).strftime('%d/%m/%Y')}</font>", small)
+    now_local = datetime.now(ZoneInfo(tz_name) if _valid_tz(tz_name) else ZoneInfo("America/Sao_Paulo"))
+    footer = Paragraph(f"<font color='#A1A1AA'>Documento gerado por Gestor360 · {now_local.strftime('%d/%m/%Y')}</font>", small)
     story.append(footer)
 
     pdf.build(story)
@@ -1087,14 +1145,15 @@ def _build_pdf(doc: dict, company: dict, client: dict) -> BytesIO:
 
 
 @api_router.get("/documents/{doc_id}/pdf")
-async def get_document_pdf(doc_id: str, user: dict = Depends(get_current_user)):
+async def get_document_pdf(doc_id: str, tz: str = "America/Sao_Paulo", user: dict = Depends(get_current_user)):
     q = {**_doc_visibility_filter(user), 'id': doc_id}
     doc = await db.documents.find_one(q, {'_id': 0})
     if not doc:
         raise HTTPException(404)
     company = await get_company_of_user(user)
     client = await db.clients.find_one({'id': doc['client_id'], 'company_id': user['company_id']}, {'_id': 0}) or {}
-    buf = _build_pdf(doc, company, client)
+    tz_name = tz if _valid_tz(tz) else "America/Sao_Paulo"
+    buf = _build_pdf(doc, company, client, tz_name=tz_name)
     filename = f"{'orcamento' if doc['doc_type'] == 'orcamento' else 'venda'}_{doc['number']:06d}.pdf"
     return StreamingResponse(buf, media_type='application/pdf', headers={'Content-Disposition': f'inline; filename="{filename}"'})
 

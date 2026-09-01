@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 8 backend-only testing of the PDF timezone localization fix (GET /api/documents/{id}/pdf?tz=<IANA>). Created a dedicated pytest suite (/app/backend/tests/test_iteration8.py, 12 tests, all PASSED) that creates a fresh orçamento with boleto_days=[30,60,90], then extracts PDF text with pypdf and compares 'Emissão:'/'Validade:'/boleto parcela dates/footer against the expected conversion of the stored UTC created_at. Verified America/Rio_Branco (UTC-5), America/Sao_Paulo (UTC-3), UTC, missing tz (defaults to SP), invalid tz ('Not/AValidZone' -> silent SP fallback, 200), and empty tz. Confirmed the exact 2h delta between SP and Acre renderings of the same doc, and that boleto due dates are derived from the local-tz created date (Acre vs UTC dates differ correctly at boundary computation). Regression: /api/documents list, /api/documents/{id} (no _id leak), /api/stats, venda PDF (no Validade, 'VENDA' title) all 200. Full-suite re-run of previous iterations: test_iteration4 (41 passed), test_iteration7 (16 passed), test_iteration8 (12 passed), backend_test (1 passed/18 skipped) when run per-file. Only test_iteration5's 5 'Equipe Kirius' slug-lookup cases fail, due to stale hardcoded seed data (that company no longer exists in the DB: only gestor360, mult2027 and one empty-code company remain) — not a code regression.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/auth/lookup-company?code=equipe-kirius", "issue": "test_iteration5 slug-parity tests fail (found:false) because the hardcoded 'Equipe Kirius' company is not present in the current DB. Stale test data, not a regression — these cases should be rewritten to create their own company or be removed."},
+      {"endpoint": "DB companies collection", "issue": "One company document has code='' (empty). Not exercised by the tz fix, but an empty company code could collide in lookup/company-login flows; worth validating a non-empty unique code at setup."},
+      {"endpoint": "pytest suite (cross-file)", "issue": "Running all test files together in parallel (pytest-xdist) produces 29 failures because test_iteration6 rotates the shared company code/password while iteration4/7 log in with the stable credentials. Per-file runs pass. Recommend isolating iteration6 (own company fixture) to keep the suite green in a single run."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration8.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "No fix required for the timezone feature — all tz behaviours (Acre/SP/UTC/default/invalid/empty), Validade shift, boleto local-tz due dates and footer date verified correct.",
+    "Optional cleanup: fix or remove the stale 'Equipe Kirius' cases in /app/backend/tests/test_iteration5.py (seed no longer exists).",
+    "Optional: make test_iteration6 use its own throwaway company so a single full-suite parallel run does not break iteration4/7 logins."
+  ],
+  "critical_code_review_comments": [
+    "_to_local/_valid_tz correctly assume naive stored datetimes are UTC and fall back to America/Sao_Paulo on ZoneInfo failure — behaviour confirmed by tests; no change needed.",
+    "/app/backend/server.py is very large (>1150 lines); consider splitting routers (auth, documents/pdf, catalog) into modules for maintainability.",
+    "Boleto due dates use created_local + timedelta(days=n) on a tz-aware datetime; this is correct for BR zones (no DST) but would drift by an hour in DST zones. Using .date() before adding days would be more robust."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration8.py"],
+  "success_rate": {"backend": "100% (12/12 iteration-8 tests; 70/70 across iteration4/7/8 + backend_test per-file)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Created TEST_cli8 client, TESTP8 product, one orçamento with boleto_days=[30,60,90] and one venda — all deleted in module teardown.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Owner netozincaovendas@gmail.com / Gestor360! ; company gestor360 / Empresa123",
+  "context_for_next_testing_agent": "Timezone PDF feature is fully verified in /app/backend/tests/test_iteration8.py (pypdf text extraction + regex on 'Emissão:'/'Validade:'/'Nª/dd/mm/yyyy'). Reuse the get_pdf/pdf_text helpers. IMPORTANT: do not run all test files in one parallel pytest invocation — test_iteration6 rotates the shared company credentials and breaks iteration4/7; run per-file. test_iteration5 'Equipe Kirius' cases are stale (company absent from DB).",
+  "rca_of_the_issue": "Original bug: PDF printed stored UTC datetimes directly. Fix adds _valid_tz/_to_local and a tz query param; verified that the rendered Emissão equals created_at_utc.astimezone(ZoneInfo(tz)) for Acre (UTC-5), SP (UTC-3) and UTC, with a validated 2h delta between SP and Acre for the same document."
+}

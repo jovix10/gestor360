@@ -154,6 +154,8 @@ export default function QuoteBuilder() {
   const [notes, setNotes] = useState("");
   const [lines, setLines] = useState([emptyLine()]);
   const [payments, setPayments] = useState([]);
+  const [globalDiscountPct, setGlobalDiscountPct] = useState(0);
+  const [globalDiscountAmount, setGlobalDiscountAmount] = useState(0);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState("itens");
   const [loadedDoc, setLoadedDoc] = useState(null);
@@ -174,6 +176,8 @@ export default function QuoteBuilder() {
       setNotes(d.notes || "");
       setLines(d.lines && d.lines.length ? d.lines : [emptyLine()]);
       setPayments(d.payments || []);
+      setGlobalDiscountPct(Number(d.global_discount_pct || 0));
+      setGlobalDiscountAmount(Number(d.global_discount_amount || 0));
     }).catch(() => toast.error("Documento não encontrado"));
   }, [editId]);
 
@@ -235,13 +239,27 @@ export default function QuoteBuilder() {
     }
   };
 
-  const totals = computeTotals(lines);
+  const totals = computeTotals(lines, { global_discount_pct: globalDiscountPct, global_discount_amount: globalDiscountAmount });
   const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
   const remaining = Math.round((totals.net - totalPaid) * 100) / 100;
 
+  const applyRoundDown = (step) => {
+    const target = Math.floor(totals.lineNet / step) * step;
+    const diff = Math.max(totals.lineNet - target, 0);
+    setGlobalDiscountPct(0);
+    setGlobalDiscountAmount(Number(diff.toFixed(2)));
+  };
+
   const addPayment = (method = "pix") => {
     const suggestedAmount = Math.max(0, Math.round(remaining * 100) / 100);
-    setPayments(cur => [...cur, { method, amount: suggestedAmount, installments: 1 }]);
+    setPayments(cur => [...cur, { method, amount: suggestedAmount, installments: 1, boleto_days: [] }]);
+  };
+
+  const parseBoletoDays = (raw) => {
+    return String(raw || "")
+      .split(/[,;\s]+/)
+      .map(x => parseInt(x, 10))
+      .filter(n => Number.isFinite(n) && n > 0);
   };
 
   const updatePayment = (idx, patch) => {
@@ -270,7 +288,10 @@ export default function QuoteBuilder() {
         method: p.method,
         amount: Number(p.amount) || 0,
         installments: Math.max(1, parseInt(p.installments) || 1),
+        boleto_days: Array.isArray(p.boleto_days) ? p.boleto_days.map(d => parseInt(d) || 0).filter(d => d > 0) : [],
       })),
+      global_discount_pct: Number(globalDiscountPct) || 0,
+      global_discount_amount: Number(globalDiscountAmount) || 0,
       notes,
     };
     try {
@@ -283,7 +304,8 @@ export default function QuoteBuilder() {
         toast.success(`${docType === "orcamento" ? "Orçamento" : "Venda"} Nº ${String(data.number).padStart(6, "0")} criado`);
       }
       try {
-        const res = await api.get(`/documents/${data.id}/pdf`, { responseType: "blob" });
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+        const res = await api.get(`/documents/${data.id}/pdf?tz=${encodeURIComponent(tz)}`, { responseType: "blob" });
         const url = URL.createObjectURL(res.data);
         const a = document.createElement("a");
         a.href = url;
@@ -428,6 +450,11 @@ export default function QuoteBuilder() {
                             onChange={(e) => updateLine(idx, { discount_pct: e.target.value })}
                             onKeyDown={(e) => onKeyDown(idx, "discount_pct", e)}
                           />
+                          {Number(l.discount_pct) > 0 && Number(l.unit_price) > 0 && (
+                            <div className="text-[10px] text-emerald-600 font-mono-num text-right mt-1" data-testid={`line-net-unit-${idx}`}>
+                              {fmtMoney(Number(l.unit_price) * (1 - Number(l.discount_pct) / 100))}/un
+                            </div>
+                          )}
                         </td>
                         <td className="px-3 py-1.5 text-right font-mono-num font-semibold align-top">{fmtMoney(net)}</td>
                         <td className="px-2 py-1.5 text-right align-top">
@@ -468,7 +495,14 @@ export default function QuoteBuilder() {
                     <div className="grid grid-cols-3 gap-2">
                       <div><Label className="text-xs">Qtd.</Label><Input type="number" value={l.quantity} onChange={(e) => updateLine(idx, { quantity: e.target.value })} /></div>
                       <div><Label className="text-xs">Valor</Label><Input type="number" step="0.01" value={l.unit_price} onBlur={(e) => onPriceBlur(idx, e.target.value)} onChange={(e) => updateLine(idx, { unit_price: e.target.value })} /></div>
-                      <div><Label className="text-xs">Desc. %</Label><Input type="number" step="0.01" value={l.discount_pct} onChange={(e) => updateLine(idx, { discount_pct: e.target.value })} /></div>
+                      <div><Label className="text-xs">Desc. %</Label>
+                        <Input type="number" step="0.01" value={l.discount_pct} onChange={(e) => updateLine(idx, { discount_pct: e.target.value })} />
+                        {Number(l.discount_pct) > 0 && Number(l.unit_price) > 0 && (
+                          <div className="text-[10px] text-emerald-600 font-mono-num mt-1">
+                            {fmtMoney(Number(l.unit_price) * (1 - Number(l.discount_pct) / 100))}/un
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className="text-right font-mono-num font-semibold">{fmtMoney(net)}</div>
                   </div>
@@ -509,6 +543,39 @@ export default function QuoteBuilder() {
         </TabsContent>
 
         <TabsContent value="pagamento" className="space-y-5 mt-6">
+          {/* Global discount / rounding */}
+          <div className="border border-zinc-200 rounded-lg bg-white p-5 space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h2 className="font-display text-lg font-semibold">Desconto no total</h2>
+                <p className="text-sm text-zinc-500">Aplique um percentual ou tire um valor fixo em cima do total (para arredondar, por exemplo).</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" data-testid="quick-pct-5" onClick={() => { setGlobalDiscountAmount(0); setGlobalDiscountPct(5); }} className="h-9 px-3 rounded-md border border-zinc-200 text-xs font-semibold hover:border-[#F05D23] hover:text-[#F05D23]">-5%</button>
+                <button type="button" data-testid="quick-pct-10" onClick={() => { setGlobalDiscountAmount(0); setGlobalDiscountPct(10); }} className="h-9 px-3 rounded-md border border-zinc-200 text-xs font-semibold hover:border-[#F05D23] hover:text-[#F05D23]">-10%</button>
+                <button type="button" data-testid="quick-round-10" onClick={() => applyRoundDown(10)} className="h-9 px-3 rounded-md border border-zinc-200 text-xs font-semibold hover:border-[#F05D23] hover:text-[#F05D23]">Arred. R$10</button>
+                <button type="button" data-testid="quick-round-100" onClick={() => applyRoundDown(100)} className="h-9 px-3 rounded-md border border-zinc-200 text-xs font-semibold hover:border-[#F05D23] hover:text-[#F05D23]">Arred. R$100</button>
+                <button type="button" data-testid="clear-global-discount" onClick={() => { setGlobalDiscountPct(0); setGlobalDiscountAmount(0); }} className="h-9 px-3 rounded-md border border-zinc-200 text-xs font-semibold text-zinc-500 hover:text-red-600">Limpar</button>
+              </div>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Percentual sobre o total (%)</Label>
+                <Input data-testid="global-discount-pct" type="number" step="0.01" min="0" max="100" value={globalDiscountPct} onChange={(e) => setGlobalDiscountPct(parseFloat(e.target.value) || 0)} />
+              </div>
+              <div>
+                <Label className="text-xs">Valor fixo em R$</Label>
+                <Input data-testid="global-discount-amount" type="number" step="0.01" min="0" value={globalDiscountAmount} onChange={(e) => setGlobalDiscountAmount(parseFloat(e.target.value) || 0)} />
+              </div>
+            </div>
+            {(totals.globalDisc > 0) && (
+              <div className="text-sm text-zinc-600 flex justify-between border-t border-zinc-100 pt-3">
+                <span>Total antes: <span className="font-mono-num line-through">{fmtMoney(totals.lineNet)}</span></span>
+                <span>Você tira <span className="font-mono-num text-red-600">- {fmtMoney(totals.globalDisc)}</span> → <span className="font-mono-num font-bold text-[#F05D23]">{fmtMoney(totals.net)}</span></span>
+              </div>
+            )}
+          </div>
+
           <div className="border border-zinc-200 rounded-lg bg-white p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div>
@@ -569,6 +636,28 @@ export default function QuoteBuilder() {
                             ))}
                           </SelectContent>
                         </Select>
+                      </div>
+                    )}
+                    {p.method === "boleto" && (
+                      <div className="col-span-12 sm:col-span-5">
+                        <Label className="text-xs">Vencimentos (dias após emissão)</Label>
+                        <Input
+                          data-testid={`payment-boleto-days-${idx}`}
+                          placeholder="ex.: 30, 60, 90"
+                          value={(p.boleto_days || []).join(", ")}
+                          onChange={(e) => updatePayment(idx, { boleto_days: parseBoletoDays(e.target.value) })}
+                        />
+                        <div className="flex gap-1 mt-1 flex-wrap">
+                          <button type="button" onClick={() => updatePayment(idx, { boleto_days: [30, 60, 90] })} className="text-[10px] px-2 py-0.5 rounded bg-zinc-100 hover:bg-[#FDF0EC] hover:text-[#F05D23] font-semibold">30/60/90</button>
+                          <button type="button" onClick={() => updatePayment(idx, { boleto_days: [15, 30, 45] })} className="text-[10px] px-2 py-0.5 rounded bg-zinc-100 hover:bg-[#FDF0EC] hover:text-[#F05D23] font-semibold">15/30/45</button>
+                          <button type="button" onClick={() => updatePayment(idx, { boleto_days: [28, 56, 84, 112] })} className="text-[10px] px-2 py-0.5 rounded bg-zinc-100 hover:bg-[#FDF0EC] hover:text-[#F05D23] font-semibold">4x 28d</button>
+                          <button type="button" onClick={() => updatePayment(idx, { boleto_days: [] })} className="text-[10px] px-2 py-0.5 rounded bg-zinc-100 hover:bg-red-50 hover:text-red-600 font-semibold">à vista</button>
+                        </div>
+                        {(p.boleto_days || []).length > 0 && Number(p.amount) > 0 && (
+                          <div className="mt-2 text-[11px] text-zinc-600 font-mono-num">
+                            {p.boleto_days.length}x de {fmtMoney(Number(p.amount) / p.boleto_days.length)} nos dias {p.boleto_days.join("/")}
+                          </div>
+                        )}
                       </div>
                     )}
                     <div className="col-span-12 sm:col-span-2 flex justify-end">
