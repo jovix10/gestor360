@@ -6,7 +6,12 @@ Sistema de gestão ERP para pequenas/médias empresas. Cadastro de clientes e pr
 ## Stack
 - Frontend: React 19 + shadcn/ui + tailwind + framer-motion + sonner + react-router-dom
 - Backend: FastAPI + Motor (MongoDB) + bcrypt + PyJWT + reportlab
-- Integrações: ViaCEP (endereço), Emergent Google OAuth (owner login)
+- Integrações: ViaCEP (endereço), BrasilAPI (CNPJ). Emergent Google OAuth REMOVIDO (deploy externo Render/Vercel usa apenas JWT email+senha).
+
+## Deploy externo (Render/Vercel)
+- `emergentintegrations==0.2.0` removido de `backend/requirements.txt` (Feb 2026)
+- `litellm` (pinada em URL do domínio emergentagent.com, não usada no código) removida (Feb 2026)
+- Backend agora zero dependências Emergent — pronto para `pip install -r requirements.txt` no Render
 
 ## Users
 - **Dono (owner)**: acesso total, gerencia equipe e empresa, único que pode Google-login
