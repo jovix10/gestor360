@@ -1,5 +1,5 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/context/AuthContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -9,7 +9,6 @@ import UserLogin from "@/pages/UserLogin";
 import OwnerLogin from "@/pages/OwnerLogin";
 import Setup from "@/pages/Setup";
 import ChangePassword from "@/pages/ChangePassword";
-import AuthCallback from "@/pages/AuthCallback";
 import Dashboard from "@/pages/Dashboard";
 import Clients from "@/pages/Clients";
 import Products from "@/pages/Products";
@@ -20,10 +19,6 @@ import Team from "@/pages/Team";
 import Settings from "@/pages/Settings";
 
 function AppRouter() {
-  const location = useLocation();
-  if (location.hash?.includes("session_id=")) {
-    return <AuthCallback />;
-  }
   return (
     <Routes>
       <Route path="/login" element={<Navigate to="/login/company" replace />} />

@@ -13,7 +13,6 @@ from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import bcrypt
 import jwt as pyjwt
-import requests as http_requests
 import re
 import unicodedata
 from io import BytesIO
@@ -121,10 +120,6 @@ class CompanyLoginIn(BaseModel):
 class UserLoginIn(BaseModel):
     username: str
     password: str
-
-
-class SessionIn(BaseModel):
-    session_id: str
 
 
 class CreateUserIn(BaseModel):
@@ -272,20 +267,6 @@ def slugify(text: str) -> str:
 
 async def get_current_user(request: Request) -> dict:
     token = None
-    session_token = request.cookies.get('session_token')
-    if session_token:
-        sess = await db.user_sessions.find_one({'session_token': session_token}, {'_id': 0})
-        if sess:
-            exp = sess.get('expires_at')
-            if isinstance(exp, str):
-                exp = datetime.fromisoformat(exp)
-            if exp and exp.tzinfo is None:
-                exp = exp.replace(tzinfo=timezone.utc)
-            if exp and exp >= datetime.now(timezone.utc):
-                user = await db.users.find_one({'user_id': sess['user_id']}, {'_id': 0, 'password_hash': 0})
-                if user:
-                    return user
-
     auth = request.headers.get('Authorization', '')
     if auth.startswith('Bearer '):
         token = auth[7:]
@@ -407,57 +388,6 @@ async def user_login(payload: UserLoginIn, request: Request, response: Response)
     return {'user': _sanitize_user(user), 'token': token, 'must_change_password': user.get('must_change_password', False)}
 
 
-@api_router.post("/auth/session")
-async def emergent_session(payload: SessionIn, response: Response):
-    """Emergent Google OAuth callback — owner only."""
-    r = http_requests.get(
-        'https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data',
-        headers={'X-Session-ID': payload.session_id},
-        timeout=10,
-    )
-    if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Session inválido")
-    data = r.json()
-    email = data['email'].lower()
-    user = await db.users.find_one({'email': email})
-    if not user:
-        # New Google signup → create company + owner user
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        company_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        await db.companies.insert_one({
-            'id': company_id, 'code': '', 'password_hash': '', 'owner_id': user_id,
-            'name': data.get('name', email) + " — Empresa", 'cnpj': '', 'ie': '',
-            'address': '', 'phone': '', 'email': email, 'logo_data_url': '',
-            'stock_enabled': False, 'pending_setup': True,
-        })
-        user = {
-            'user_id': user_id, 'company_id': company_id,
-            'email': email, 'name': data.get('name', email),
-            'username': 'admin', 'picture': data.get('picture', ''),
-            'auth_provider': 'google', 'role': 'owner',
-            'must_change_password': False, 'created_at': now,
-        }
-        await db.users.insert_one(dict(user))
-    else:
-        if user.get('role') != 'owner':
-            raise HTTPException(403, "Login com Google só está disponível para o dono da empresa.")
-        await db.users.update_one({'user_id': user['user_id']}, {'$set': {
-            'picture': data.get('picture', user.get('picture', '')),
-        }})
-
-    session_token = data['session_token']
-    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
-    await db.user_sessions.insert_one({
-        'user_id': user['user_id'],
-        'session_token': session_token,
-        'expires_at': expires_at.isoformat(),
-        'created_at': datetime.now(timezone.utc).isoformat(),
-    })
-    response.set_cookie('session_token', session_token, httponly=True, secure=True, samesite='none', path='/', max_age=7*24*3600)
-    return {'user': _sanitize_user(user), 'must_change_password': user.get('must_change_password', False)}
-
-
 @api_router.post("/auth/setup-company")
 async def setup_company(payload: SetupCompanyIn, user: dict = Depends(get_current_user)):
     require_roles(user, ['owner'])
@@ -524,10 +454,6 @@ async def change_password(payload: ChangePasswordIn, user: dict = Depends(get_cu
 
 @api_router.post("/auth/logout")
 async def logout(response: Response, request: Request):
-    session_token = request.cookies.get('session_token')
-    if session_token:
-        await db.user_sessions.delete_one({'session_token': session_token})
-    response.delete_cookie('session_token', path='/')
     response.delete_cookie('jwt_token', path='/')
     response.delete_cookie('company_session', path='/')
     return {'ok': True}
@@ -1192,11 +1118,19 @@ async def root():
 
 app.include_router(api_router)
 
+# CORS: restrict to configured frontend + localhost for dev
+_frontend_url = os.environ.get('FRONTEND_URL', '').rstrip('/')
+_allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+if _frontend_url:
+    _allowed_origins.append(_frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
-    allow_origin_regex=".*",
+    allow_origins=_allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
