@@ -13,3 +13,9 @@ __pycache__/
 .DS_Store
 *.log
 test_reports/
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials

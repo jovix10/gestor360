@@ -40,6 +40,7 @@ export default function Settings() {
     setSaving(true);
     try {
       await api.put("/company", form);
+      await checkAuth();
       toast.success("Empresa salva");
     } catch (err) { toast.error(err.response?.data?.detail || "Erro"); }
     finally { setSaving(false); }
