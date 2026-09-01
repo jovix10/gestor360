@@ -84,7 +84,7 @@ class TestCostPrice:
     # ---------- baseline ----------
     def test_health(self):
         r = requests.get(f"{BASE}/")
-        assert r.status_code == 200 and r.json().get("ok") is True
+        assert r.status_code == 200 and r.json().get("ok") == True
 
     # ---------- owner: create with cost_price ----------
     def test_owner_create_product_with_cost_price(self, owner):
@@ -157,7 +157,7 @@ class TestCostPrice:
         STATE["ger_id"] = g.json()["user_id"]
 
         tok, must = _two_step_token(VEND_USERNAME, VEND_PW)
-        assert must is True
+        assert must == True
         cp = sess(tok).post(f"{BASE}/auth/change-password",
                             json={"current_password": VEND_PW, "new_password": VEND_PW})
         # same password may be accepted; re-login to get a clean token

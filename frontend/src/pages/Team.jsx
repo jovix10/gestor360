@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,8 +24,8 @@ export default function Team() {
   const [form, setForm] = useState(emptyForm);
   const [newPassword, setNewPassword] = useState("");
 
-  const load = () => api.get("/users").then(r => setRows(r.data));
-  useEffect(() => { load(); }, []);
+  const load = useCallback(() => api.get("/users").then(r => setRows(r.data)), []);
+  useEffect(() => { load(); }, [load]);
 
   const openNew = () => { setForm(emptyForm); setEditing(null); setOpen(true); };
   const openEdit = (u) => { setForm({ name: u.name, username: u.username, email: u.email || "", password: "", role: u.role }); setEditing(u); setOpen(true); };

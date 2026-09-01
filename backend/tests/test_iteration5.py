@@ -63,7 +63,7 @@ def owner():
 class TestSlugifyParity:
     def test_00_health(self):
         r = requests.get(f"{BASE}/")
-        assert r.status_code == 200 and r.json().get("ok") is True
+        assert r.status_code == 200 and r.json().get("ok") == True
 
     # ---------- company-login slugify parity on existing stable company ----------
     @pytest.mark.parametrize("code_variant", [
@@ -107,7 +107,7 @@ class TestSlugifyParity:
         r = requests.get(f"{BASE}/auth/lookup-company", params={"code": code_variant})
         assert r.status_code == 200, r.text[:200]
         d = r.json()
-        assert d["found"] is True, f"{code_variant!r} -> {d}"
+        assert d["found"] == True, f"{code_variant!r} -> {d}"
         assert d["name"] == KIRIUS_NAME
         assert d["code"] == KIRIUS_CODE
 
@@ -123,14 +123,14 @@ class TestSlugifyParity:
         for bad in ["   ", "!!!", "---"]:
             r = requests.get(f"{BASE}/auth/lookup-company", params={"code": bad})
             assert r.status_code == 200, r.text[:150]
-            if r.json().get("found") is True:
+            if r.json().get("found") == True:
                 findings.append(f"lookup-company({bad!r}) -> {r.json()}")
         STATE["lookup_empty_findings"] = findings
         assert not findings, "; ".join(findings)
 
     def test_lookup_company_not_found(self):
         r = requests.get(f"{BASE}/auth/lookup-company", params={"code": f"nope{SUFFIX}"})
-        assert r.status_code == 200 and r.json()["found"] is False
+        assert r.status_code == 200 and r.json()["found"] == False
 
 
     # ---------- setup + login round-trip (same class: xdist loadscope keeps order) ----------
@@ -144,7 +144,7 @@ class TestSlugifyParity:
 
         # lookup with the raw string
         lk = requests.get(f"{BASE}/auth/lookup-company", params={"code": raw})
-        assert lk.status_code == 200 and lk.json()["found"] is True
+        assert lk.status_code == 200 and lk.json()["found"] == True
         assert lk.json()["code"] == "neto-materiais"
 
         # login with the raw string + case variants
@@ -188,4 +188,4 @@ class TestSlugifyParity:
         me = session(d["token"]).get(f"{BASE}/auth/me")
         assert me.status_code == 200
         assert me.json()["company"]["code"] == STABLE_CODE
-        assert me.json()["company"]["pending_setup"] is False
+        assert me.json()["company"]["pending_setup"] == False

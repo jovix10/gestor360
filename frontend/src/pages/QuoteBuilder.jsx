@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Trash2, Plus, FileText, ShoppingCart, Save, Search, X } from "lucide-react";
 import { toast } from "sonner";
 
-const emptyLine = () => ({ product_id: null, code: "", description: "", quantity: 1, unit_price: 0, discount_pct: 0 });
+const emptyLine = () => ({ id: crypto.randomUUID(), product_id: null, code: "", description: "", quantity: 1, unit_price: 0, discount_pct: 0 });
 
 const METHOD_LABELS = {
   pix: "PIX",
@@ -174,8 +174,8 @@ export default function QuoteBuilder() {
       setDocType(d.doc_type);
       setClientId(d.client_id);
       setNotes(d.notes || "");
-      setLines(d.lines && d.lines.length ? d.lines : [emptyLine()]);
-      setPayments(d.payments || []);
+      setLines(d.lines && d.lines.length ? d.lines.map(l => ({ ...l, id: l.id || crypto.randomUUID() })) : [emptyLine()]);
+      setPayments((d.payments || []).map(p => ({ ...p, id: p.id || crypto.randomUUID() })));
       setGlobalDiscountPct(Number(d.global_discount_pct || 0));
       setGlobalDiscountAmount(Number(d.global_discount_amount || 0));
     }).catch(() => toast.error("Documento não encontrado"));
@@ -243,6 +243,18 @@ export default function QuoteBuilder() {
   const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
   const remaining = Math.round((totals.net - totalPaid) * 100) / 100;
 
+  const remainingClass = () => {
+    if (Math.abs(remaining) < 0.01) return "text-[#F05D23]";
+    if (remaining > 0) return "text-zinc-900";
+    return "text-red-600";
+  };
+
+  const saveButtonLabel = () => {
+    if (saving) return "Salvando…";
+    if (editId) return "Atualizar e gerar PDF";
+    return "Salvar e gerar PDF";
+  };
+
   const applyRoundDown = (step) => {
     const target = Math.floor(totals.lineNet / step) * step;
     const diff = Math.max(totals.lineNet - target, 0);
@@ -252,7 +264,7 @@ export default function QuoteBuilder() {
 
   const addPayment = (method = "pix") => {
     const suggestedAmount = Math.max(0, Math.round(remaining * 100) / 100);
-    setPayments(cur => [...cur, { method, amount: suggestedAmount, installments: 1, boleto_days: [] }]);
+    setPayments(cur => [...cur, { id: crypto.randomUUID(), method, amount: suggestedAmount, installments: 1, boleto_days: [] }]);
   };
 
   const parseBoletoDays = (raw) => {
@@ -394,7 +406,7 @@ export default function QuoteBuilder() {
                   {lines.map((l, idx) => {
                     const net = Number(l.quantity || 0) * Number(l.unit_price || 0) * (1 - Number(l.discount_pct || 0) / 100);
                     return (
-                      <tr key={idx} className="border-t border-zinc-100">
+                      <tr key={l.id} className="border-t border-zinc-100">
                         <td className="px-3 py-1.5 align-top">
                           <ProductSearchCell
                             idx={idx}
@@ -474,7 +486,7 @@ export default function QuoteBuilder() {
               {lines.map((l, idx) => {
                 const net = Number(l.quantity || 0) * Number(l.unit_price || 0) * (1 - Number(l.discount_pct || 0) / 100);
                 return (
-                  <div key={idx} className="p-4 space-y-2">
+                  <div key={l.id} className="p-4 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-zinc-500">Item #{idx + 1}</span>
                       <button onClick={() => removeLine(idx)} className="text-red-500"><Trash2 className="w-4 h-4" /></button>
@@ -604,7 +616,7 @@ export default function QuoteBuilder() {
             ) : (
               <div className="space-y-2">
                 {payments.map((p, idx) => (
-                  <div key={idx} className="grid grid-cols-12 gap-2 items-end p-3 border border-zinc-200 rounded-lg" data-testid={`payment-row-${idx}`}>
+                  <div key={p.id} className="grid grid-cols-12 gap-2 items-end p-3 border border-zinc-200 rounded-lg" data-testid={`payment-row-${idx}`}>
                     <div className="col-span-12 sm:col-span-4">
                       <Label className="text-xs">Forma</Label>
                       <Select value={p.method} onValueChange={(v) => updatePayment(idx, { method: v })}>
@@ -683,7 +695,7 @@ export default function QuoteBuilder() {
             </div>
             <div className={`border rounded-lg p-4 ${Math.abs(remaining) < 0.01 ? "bg-[#FDF0EC] border-[#F05D23]" : "bg-white border-zinc-200"}`}>
               <div className="text-xs uppercase tracking-wider text-zinc-500">Restante</div>
-              <div className={`font-mono-num text-2xl font-bold mt-1 ${Math.abs(remaining) < 0.01 ? "text-[#F05D23]" : remaining > 0 ? "text-zinc-900" : "text-red-600"}`}>
+              <div className={`font-mono-num text-2xl font-bold mt-1 ${remainingClass()}`}>
                 {fmtMoney(remaining)}
               </div>
             </div>
@@ -697,7 +709,7 @@ export default function QuoteBuilder() {
               className="h-11 px-6 bg-[#F05D23] hover:bg-[#D94E1B] text-white font-semibold"
             >
               <Save className="w-4 h-4 mr-2" />
-              {saving ? "Salvando…" : (editId ? "Atualizar e gerar PDF" : "Salvar e gerar PDF")}
+              {saveButtonLabel()}
             </Button>
           </div>
         </TabsContent>

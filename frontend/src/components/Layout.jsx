@@ -105,7 +105,9 @@ export default function Layout() {
           if (city && uf) setLocation(`${city}/${uf}`);
           else if (city) setLocation(city);
           else if (uf) setLocation(uf);
-        } catch {}
+        } catch (err) {
+          console.warn("[Layout] reverse geocoding failed:", err);
+        }
       },
       () => {},
       { maximumAge: 3600_000, timeout: 5000 }

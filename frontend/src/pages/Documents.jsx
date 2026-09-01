@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, fmtMoney, fmtDateTime } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,8 @@ export default function Documents() {
   const [filter, setFilter] = useState("all");
   const navigate = useNavigate();
 
-  const load = () => api.get("/documents").then(r => setRows(r.data));
-  useEffect(() => { load(); }, []);
+  const load = useCallback(() => api.get("/documents").then(r => setRows(r.data)), []);
+  useEffect(() => { load(); }, [load]);
 
   const filtered = rows.filter(r => filter === "all" ? true : r.doc_type === filter);
 

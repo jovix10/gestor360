@@ -77,7 +77,7 @@ class TestV2Flow:
     # ---------- owner login / me ----------
     def test_root(self):
         r = requests.get(f"{BASE}/")
-        assert r.status_code == 200 and r.json().get("ok") is True
+        assert r.status_code == 200 and r.json().get("ok") == True
 
     def test_owner_login(self, owner):
         r = owner.post(f"{BASE}/auth/owner-login", json={"email": OWNER_EMAIL, "password": OWNER_PW})
@@ -128,7 +128,7 @@ class TestV2Flow:
         assert r.status_code == 200, r.text[:300]
         assert r.json()["code"] == COMPANY_CODE
         me = owner.get(f"{BASE}/auth/me").json()
-        assert me["company"]["pending_setup"] is False
+        assert me["company"]["pending_setup"] == False
         assert me["company"]["code"] == COMPANY_CODE
         assert me["company"]["name"] == COMPANY_NAME
 
@@ -151,11 +151,11 @@ class TestV2Flow:
         r = requests.get(f"{BASE}/auth/lookup-company", params={"code": COMPANY_CODE})
         assert r.status_code == 200
         d = r.json()
-        assert d["found"] is True and d["name"] == COMPANY_NAME
+        assert d["found"] == True and d["name"] == COMPANY_NAME
 
     def test_lookup_company_not_found(self):
         r = requests.get(f"{BASE}/auth/lookup-company", params={"code": "nope-" + SUFFIX})
-        assert r.status_code == 200 and r.json()["found"] is False
+        assert r.status_code == 200 and r.json()["found"] == False
 
     # ---------- team CRUD ----------
     def test_create_vendedor(self, owner):
@@ -168,7 +168,7 @@ class TestV2Flow:
         listed = owner.get(f"{BASE}/users").json()
         row = next((u for u in listed if u["user_id"] == d["user_id"]), None)
         assert row is not None, "created user not in GET /users"
-        assert row["must_change_password"] is True
+        assert row["must_change_password"] == True
 
     def test_create_user_duplicate_username(self, owner):
         r = owner.post(f"{BASE}/users", json={
@@ -185,7 +185,7 @@ class TestV2Flow:
         assert r.status_code == 200
         row = next(u for u in owner.get(f"{BASE}/users").json() if u["user_id"] == STATE["vend_id"])
         assert row["name"] == "TEST Vendedor R"
-        assert row["must_change_password"] is True
+        assert row["must_change_password"] == True
 
     def test_cannot_demote_owner(self, owner):
         r = owner.put(f"{BASE}/users/{STATE['owner_user_id']}", json={"role": "vendedor"})
@@ -224,7 +224,7 @@ class TestV2Flow:
         assert r2.status_code == 200, r2.text[:300]
         d2 = r2.json()
         assert d2["user"]["role"] == "vendedor"
-        assert d2["must_change_password"] is True
+        assert d2["must_change_password"] == True
         STATE["vend_token"] = d2["token"]
 
     def test_owner_two_step_login(self):
@@ -250,13 +250,13 @@ class TestV2Flow:
         s = client_session(STATE["vend_token"])
         r = s.post(f"{BASE}/auth/change-password", json={"current_password": VEND_PW2, "new_password": VEND_PW})
         assert r.status_code == 200
-        assert s.get(f"{BASE}/auth/me").json()["must_change_password"] is False
+        assert s.get(f"{BASE}/auth/me").json()["must_change_password"] == False
         s2 = client_session()
         assert s2.post(f"{BASE}/auth/company-login",
                        json={"code": COMPANY_CODE, "password": COMPANY_PW}).status_code == 200
         r2 = s2.post(f"{BASE}/auth/user-login", json={"username": VEND_USERNAME, "password": VEND_PW})
         assert r2.status_code == 200
-        assert r2.json()["must_change_password"] is False
+        assert r2.json()["must_change_password"] == False
         STATE["vend_token"] = r2.json()["token"]
 
     # ---------- owner core CRUD regression ----------

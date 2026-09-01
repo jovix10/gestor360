@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,8 +23,8 @@ export default function Clients() {
   const [cepLoading, setCepLoading] = useState(false);
   const [cnpjLoading, setCnpjLoading] = useState(false);
 
-  const load = () => api.get("/clients").then(r => setRows(r.data));
-  useEffect(() => { load(); }, []);
+  const load = useCallback(() => api.get("/clients").then(r => setRows(r.data)), []);
+  useEffect(() => { load(); }, [load]);
 
   const openNew = () => { setForm(empty); setEditing(null); setOpen(true); };
   const openEdit = (c) => { setForm({ ...empty, ...c }); setEditing(c.id); setOpen(true); };

@@ -26,9 +26,9 @@ if not base_url:
 BASE = base_url.rstrip("/") + "/api"
 
 SUFFIX = uuid.uuid4().hex[:6]
-STABLE_CODE = "gestor360"
-STABLE_PW = "Empresa123"
-STABLE_NAME = "Gestor360 Teste"
+STABLE_CODE = os.environ.get("TEST_COMPANY_CODE", "gestor360")
+STABLE_PW = os.environ.get("TEST_COMPANY_PW", "Empresa123")
+STABLE_NAME = os.environ.get("TEST_COMPANY_NAME", "Gestor360 Teste")
 OTHER_COMPANY_CODE = "equipe-kirius"   # different company, used for duplicate-code test
 
 VEND_USERNAME = f"v6vend{SUFFIX}"
@@ -103,7 +103,7 @@ class TestChangeCompanyCredentials:
     # ---------- basics ----------
     def test_00_health(self):
         r = requests.get(f"{BASE}/")
-        assert r.status_code == 200 and r.json().get("ok") is True
+        assert r.status_code == 200 and r.json().get("ok") == True
 
     def test_01_baseline_state(self, owner):
         """Make sure we start from code=gestor360 / password=Empresa123."""
@@ -148,7 +148,7 @@ class TestChangeCompanyCredentials:
         assert r.status_code == 403, f"{role} -> {r.status_code}: {r.text[:200]}"
         # nothing changed
         chk = requests.get(f"{BASE}/auth/lookup-company", params={"code": STABLE_CODE})
-        assert chk.json()["found"] is True
+        assert chk.json()["found"] == True
 
     # ---------- (b) wrong current password ----------
     def test_05_wrong_current_password(self, owner):
@@ -200,7 +200,7 @@ class TestChangeCompanyCredentials:
                        json={"current_password": STATE["current_company_pw"], "new_code": "Néto Açaí"})
         assert r.status_code == 200, r.text[:300]
         d = r.json()
-        assert d.get("ok") is True
+        assert d.get("ok") == True
         assert d.get("code") == "neto-acai", f"expected 'neto-acai', got {d.get('code')!r}"
         STATE["code"] = "neto-acai"
 
@@ -216,9 +216,9 @@ class TestChangeCompanyCredentials:
         old = requests.post(f"{BASE}/auth/company-login", json={"code": STABLE_CODE, "password": pw})
         assert old.status_code == 401, f"old code still works: {old.status_code}"
         lk = requests.get(f"{BASE}/auth/lookup-company", params={"code": STABLE_CODE})
-        assert lk.status_code == 200 and lk.json()["found"] is False
+        assert lk.status_code == 200 and lk.json()["found"] == False
         lk2 = requests.get(f"{BASE}/auth/lookup-company", params={"code": "Néto Açaí"})
-        assert lk2.json()["found"] is True and lk2.json()["code"] == "neto-acai"
+        assert lk2.json()["found"] == True and lk2.json()["code"] == "neto-acai"
 
     def test_12_auth_me_reflects_new_code(self, owner):
         me = owner.get(f"{BASE}/auth/me")
@@ -231,7 +231,7 @@ class TestChangeCompanyCredentials:
         r = owner.post(f"{BASE}/company/change-credentials",
                        json={"current_password": STATE["current_company_pw"], "new_password": new_pw})
         assert r.status_code == 200, r.text[:300]
-        assert r.json()["ok"] is True
+        assert r.json()["ok"] == True
         assert r.json()["code"] == "neto-acai", "code must be unchanged when only password sent"
         old = requests.post(f"{BASE}/auth/company-login",
                             json={"code": "neto-acai", "password": STATE["current_company_pw"]})
@@ -263,7 +263,7 @@ class TestChangeCompanyCredentials:
     def test_15_lookup_company_empty_slug(self, bad):
         r = requests.get(f"{BASE}/auth/lookup-company", params={"code": bad})
         assert r.status_code == 200, f"{bad!r} -> {r.status_code}: {r.text[:150]}"
-        assert r.json().get("found") is False, f"{bad!r} leaked: {r.json()}"
+        assert r.json().get("found") == False, f"{bad!r} leaked: {r.json()}"
 
     @pytest.mark.parametrize("bad", ["   ", "!!!", "@@@", "---", ""])
     def test_16_company_login_empty_slug(self, bad):
