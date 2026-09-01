@@ -1,169 +1,113 @@
-# Gestor360 — ERP web em Português
+# Gestor360
 
-Sistema de gestão em duas etapas de login (empresa + usuário), com clientes, produtos, orçamentos, vendas, PDFs profissionais, controle de estoque opcional, papéis (Dono/Gerente/Vendedor) e pagamentos flexíveis (PIX, dinheiro, débito, crédito com parcelas, boleto com múltiplos vencimentos, transferência).
-
-## Stack
-- **Frontend**: React 19 (Create React App) + Tailwind + shadcn/ui + sonner
-- **Backend**: FastAPI + Uvicorn + Motor (MongoDB async) + ReportLab (PDF)
-- **Banco**: MongoDB Atlas M0 (free)
-- **Deploy**: Vercel (frontend) + Render Free (backend)
+ERP multi-tenant (Owner / Gerente / Vendedor) para orçamentos, vendas e PDF profissional.
+**Stack:** React 19 + Vite (frontend) · FastAPI + asyncpg (backend) · Supabase PostgreSQL (banco) · JWT customizado (auth 2-step).
 
 ---
 
-## 1. Preparar o MongoDB Atlas (banco gratuito M0)
+## 1) Criar o projeto Supabase
 
-1. Acesse https://www.mongodb.com/cloud/atlas/register e crie uma conta.
-2. Na tela **Deploy a database**, escolha **M0 Free**, provedor à sua escolha (AWS/GCP/Azure) e uma região próxima.
-3. Clique em **Create Cluster**.
-4. Em **Security → Database Access**, crie um usuário do banco:
-   - Autenticação: **Password**
-   - Anote **usuário** e **senha** (sem caracteres especiais como `@`, `/`, `:` — ou codifique-os por URL).
-   - Papel: **Read and write to any database**.
-5. Em **Security → Network Access**, adicione um IP:
-   - Para produção com o Render, use **0.0.0.0/0** (permite todos os IPs — Render Free não tem IP fixo).
-6. Volte para **Deployment → Database**, clique em **Connect → Drivers**, escolha **Python 3.11+** e copie a **connection string**. Exemplo:
-   ```
-   mongodb+srv://usuario:senha@cluster0.abcde.mongodb.net/?retryWrites=true&w=majority
-   ```
-   Guarde essa string — ela é o `MONGO_URL`.
+1. https://supabase.com/dashboard → **New project**
+2. Região: `South America (São Paulo)`
+3. Defina uma **Database password** forte (você vai precisar dela)
+4. Depois de criado, vá em **SQL Editor → New query**, cole todo o conteúdo de `backend/schema.sql` e execute (**Run**). Vai criar:
+   - Tabelas: `companies`, `users`, `clients`, `products`, `documents`, `counters`
+   - Todas com **Row Level Security** habilitada (bloqueio total para anon/authenticated)
+   - Função `next_doc_number()` para numeração atômica de documentos
+5. Vá em **Project Settings → API** e anote:
+   - `Project URL` → `SUPABASE_URL`
+   - `anon public` key → `SUPABASE_ANON_KEY`
+   - `service_role secret` key → `SUPABASE_SERVICE_ROLE_KEY` (**NUNCA expor no frontend**)
+6. **Project Settings → Database → Connection string → URI (Transaction pooler)**
+   - Copie a string, substitua `[YOUR-PASSWORD]` pela senha do banco → `SUPABASE_DB_URL`
 
-## 2. Subir o projeto para o GitHub
+## 2) Backend (Render)
 
-```bash
-# na pasta do projeto (com backend/ e frontend/):
-git init
-git add .
-git commit -m "Gestor360 initial"
+1. https://render.com → **New Web Service** → conecte o repositório
+2. Configuração:
+   - **Root Directory:** `backend`
+   - **Environment:** `Python 3`
+   - **Build command:** `pip install -r requirements.txt`
+   - **Start command:** `uvicorn server:app --host 0.0.0.0 --port $PORT`
+3. **Environment** tab — adicione as variáveis (baseado em `backend/.env.example`):
+   - `SUPABASE_URL`
+   - `SUPABASE_ANON_KEY`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `SUPABASE_DB_URL` ← **usar o Transaction pooler (porta 6543)**
+   - `JWT_SECRET` (gere com `openssl rand -hex 48`)
+   - `FRONTEND_URL` = URL público do frontend Vercel (sem barra no final)
+   - (opcional) `SEED_OWNER_EMAIL` / `SEED_OWNER_NAME` / `SEED_OWNER_PASSWORD` — cria o primeiro dono no primeiro startup
+4. Deploy. Aguarde `Build successful`. A URL final (ex.: `https://gestor360-api.onrender.com`) vai para o frontend.
 
-# crie um repositório vazio em https://github.com/new (sem README/.gitignore)
-git branch -M main
-git remote add origin https://github.com/SEU_USUARIO/gestor360.git
-git push -u origin main
+## 3) Frontend (Vercel)
+
+1. https://vercel.com → **Add New Project** → conecte o mesmo repositório
+2. Configuração:
+   - **Root Directory:** `frontend`
+   - **Framework Preset:** `Vite` (autodetect)
+   - **Build Command:** `yarn build`
+   - **Output Directory:** `build`
+3. **Environment Variables** — adicione (baseado em `frontend/.env.example`):
+   - `REACT_APP_BACKEND_URL` = URL do Render (ex.: `https://gestor360-api.onrender.com`)
+4. Deploy. Após o build, copie o URL público (ex.: `https://gestor360.vercel.app`).
+5. Volte ao Render → atualize `FRONTEND_URL` com esse valor e redeploy o backend (necessário para CORS).
+
+## 4) Primeiro acesso
+
+- Se você **configurou** `SEED_OWNER_*` no Render, use essas credenciais em `/login/owner`.
+- Se não, use `/login/owner` → clique em "Registrar" (usa `POST /api/auth/register`).
+- Depois do primeiro login o dono é levado para `/setup`, onde define o **código** e a **senha da empresa** que os outros usuários (gerente/vendedor) usarão na Etapa 1 do login.
+
+---
+
+## Arquitetura
+
+```
+┌─────────────────┐   HTTPS  ┌────────────────────┐    asyncpg   ┌─────────────────┐
+│  Vite frontend  │ ───────► │  FastAPI backend   │ ───────────► │ Supabase Postgres │
+│  (Vercel)       │  JWT +   │  (Render)          │  service-role│ (multi-tenant)  │
+│  jsPDF PDFs     │  cookies │  bcrypt · JWT 2step│              │  RLS defensiva  │
+└─────────────────┘          └────────────────────┘              └─────────────────┘
 ```
 
-## 3. Publicar o backend no Render (Free)
+### Multi-tenancy
+- Cada `users.company_id` amarra o usuário à sua empresa.
+- **Backend enforce**: toda query passa `WHERE company_id = $1`.
+- **Postgres enforce**: RLS habilitada + forçada em todas as tabelas, com política restritiva `USING (false)` para `anon` e `authenticated` — se algum dia a `anon_key` vazar, nada volta.
+- O backend usa a `service_role` connection, que bypassa RLS. É o único jeito legítimo de ler dados.
 
-1. Acesse https://render.com e crie uma conta com o GitHub.
-2. Clique em **New → Web Service** e conecte o repositório do Gestor360.
-3. Configure:
-   - **Root Directory**: `backend`
-   - **Runtime**: Python 3
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn server:app --host 0.0.0.0 --port $PORT`
-   - **Plan**: Free
-4. Em **Environment**, cadastre as variáveis:
-   - `MONGO_URL` = a connection string do Atlas
-   - `DB_NAME` = `gestor360`
-   - `JWT_SECRET` = uma string longa e aleatória (ex.: gerada em https://www.random.org/passwords/)
-   - `FRONTEND_URL` = deixe em branco por enquanto (preenchemos depois de publicar na Vercel)
-   - `PYTHON_VERSION` = `3.11.9`
-5. Clique em **Create Web Service**. Após o build, o Render fornece uma URL pública, por exemplo:
-   ```
-   https://gestor360-backend.onrender.com
-   ```
-   Guarde essa URL — ela é o `REACT_APP_BACKEND_URL`.
+### PDF
+- Gerado 100% no browser com **jsPDF** (`src/lib/pdf.js`).
+- Layout preserva o visual do ReportLab: cabeçalho da empresa (com logo), tabela dark header + zebra, totais com destaque laranja, condições de pagamento com vencimentos de boleto.
+- Timezone é do próprio browser — nada de query param.
 
-> **Alternativa via `render.yaml`**: o repositório já contém um `render.yaml` na raiz. Ao criar o serviço, você pode usar **New → Blueprint** e o Render lê essa configuração automaticamente. Mesmo assim, preencha as variáveis marcadas como `sync: false`.
+### Auth
+- Login em duas etapas:
+  1. `POST /api/auth/company-login` → cookie `company_session` (30 min)
+  2. `POST /api/auth/user-login` → cookie `jwt_token` (7 dias) + token no body (usado pelo interceptor axios)
+- Dono pode entrar direto em `/login/owner` (email/senha, sem código de empresa).
+- Papéis: **owner** (tudo), **gerente** (tudo exceto Team/change-credentials), **vendedor** (só vê próprios documentos, não vê `cost_price`).
 
-## 4. Publicar o frontend na Vercel
+## Desenvolvimento local
 
-1. Acesse https://vercel.com com sua conta do GitHub.
-2. Clique em **Add New → Project** e importe o repositório do Gestor360.
-3. Na tela de configuração:
-   - **Framework Preset**: **Create React App**
-   - **Root Directory**: `frontend`
-   - **Build Command**: `yarn build` (ou aceite o padrão detectado)
-   - **Output Directory**: `build`
-4. Em **Environment Variables**, adicione:
-   - `REACT_APP_BACKEND_URL` = a URL pública do Render (ex.: `https://gestor360-backend.onrender.com`)
-5. Clique em **Deploy**. Ao terminar, a Vercel fornece a URL pública, por exemplo:
-   ```
-   https://gestor360.vercel.app
-   ```
-
-## 5. Fechar o CORS
-
-1. Volte no Render e edite a variável `FRONTEND_URL` para a URL da Vercel (sem barra no final):
-   ```
-   FRONTEND_URL=https://gestor360.vercel.app
-   ```
-2. O Render reinicia o serviço automaticamente. A partir desse momento apenas o domínio da Vercel poderá chamar o backend.
-
-## 6. Testes finais
-
-- Acesse a URL da Vercel.
-- Clique em **Sou o dono, entrar direto** e crie a conta owner com email/senha.
-- Você será direcionado para `/setup` — defina o **código da empresa** e a **senha da empresa**.
-- Verifique cada área:
-  - Clientes: cadastrar, buscar por parte do nome, buscar CNPJ via BrasilAPI, editar, excluir.
-  - Produtos: cadastrar com preço de tabela e preço de custo, unidade, estoque.
-  - Novo Documento: montar orçamento com Enter navegando as colunas; buscar produto por código ou descrição; aba Pagamento com PIX + Crédito 1–12x + Boleto com vencimentos 30/60/90; desconto no total.
-  - Documentos: baixar PDF (verificar cabeçalho da empresa, dados do cliente, tabela, totais, pagamento, datas em horário local).
-  - Finanças (Dono/Gerente): estatísticas e receita do mês.
-  - Equipe (Dono): criar vendedores/gerentes, resetar senha.
-- Faça logout, volte à tela `/login/company`, use o código + senha da empresa e entre como o usuário criado — confirme que o vendedor só vê os próprios documentos.
-
----
-
-## Como testar localmente
-
-### Backend
 ```bash
+# Backend
 cd backend
-cp .env.example .env       # e preencha MONGO_URL, DB_NAME, JWT_SECRET
+cp .env.example .env         # preencha SUPABASE_* + JWT_SECRET
 pip install -r requirements.txt
 uvicorn server:app --host 0.0.0.0 --port 8001 --reload
-```
-Health-check: http://localhost:8001/api/ deve retornar `{"app":"Gestor360","ok":true}`.
 
-### Frontend
-```bash
+# Frontend
 cd frontend
-cp .env.example .env       # e defina REACT_APP_BACKEND_URL=http://localhost:8001
+cp .env.example .env         # REACT_APP_BACKEND_URL=http://localhost:8001
 yarn install
-yarn start
-```
-Aplicação: http://localhost:3000
-
-## Variáveis de ambiente
-
-### Backend (`backend/.env`)
-| Variável | Uso |
-|---|---|
-| `MONGO_URL` | String de conexão do MongoDB Atlas |
-| `DB_NAME` | Nome do banco (ex.: `gestor360`) |
-| `JWT_SECRET` | Segredo para assinar tokens JWT |
-| `FRONTEND_URL` | Domínio autorizado no CORS (produção) |
-| `PORT` | Porta do servidor (Render define automaticamente) |
-
-### Frontend (`frontend/.env`)
-| Variável | Uso |
-|---|---|
-| `REACT_APP_BACKEND_URL` | URL pública do backend |
-
-## Estrutura de pastas
-```
-gestor360/
-├── backend/
-│   ├── server.py            # FastAPI + endpoints + PDF (ReportLab)
-│   ├── requirements.txt
-│   ├── .env.example
-│   └── tests/               # pytest
-├── frontend/
-│   ├── src/
-│   │   ├── App.js
-│   │   ├── components/      # Layout, ProtectedRoute, ui/*
-│   │   ├── context/AuthContext.js
-│   │   ├── lib/api.js
-│   │   └── pages/           # CompanyLogin, UserLogin, OwnerLogin, Setup, ChangePassword, Dashboard, Clients, Products, QuoteBuilder, Documents, Finances, Team, Settings
-│   ├── package.json
-│   └── .env.example
-├── render.yaml              # Blueprint do Render
-└── README.md
+yarn dev                     # http://localhost:3000
 ```
 
-## Observações
+## Segurança
 
-- Login com Google foi **removido** temporariamente. Toda a autenticação usa email/senha (owner) ou usuário/senha (equipe via dois passos).
-- A geração de PDF permanece via ReportLab (backend) sem alterações — datas ajustadas pelo parâmetro `?tz=` enviado pelo frontend.
-- Nenhum modelo, coleção ou regra de negócio foi alterado nesta preparação de deploy.
+- `SUPABASE_SERVICE_ROLE_KEY` **nunca** vai para o frontend nem para o Git — só existe no Render.
+- `JWT_SECRET` idem — gere um forte com `openssl rand -hex 48`.
+- CORS restrito a `FRONTEND_URL` + localhost em dev.
+- Senhas em `bcrypt`.
+- Isolamento entre empresas garantido por `WHERE company_id = $1` em **todas** as queries + RLS defensiva.

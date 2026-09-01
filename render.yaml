@@ -1,21 +1,30 @@
 services:
   - type: web
-    name: gestor360-backend
+    name: gestor360-api
     runtime: python
-    plan: free
-    region: oregon
     rootDir: backend
+    plan: free
+    autoDeploy: true
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /api/
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
-      - key: MONGO_URL
-        sync: false
-      - key: DB_NAME
-        sync: false
       - key: JWT_SECRET
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_DB_URL
         sync: false
       - key: FRONTEND_URL
+        sync: false
+      - key: SEED_OWNER_EMAIL
+        sync: false
+      - key: SEED_OWNER_NAME
+        sync: false
+      - key: SEED_OWNER_PASSWORD
         sync: false

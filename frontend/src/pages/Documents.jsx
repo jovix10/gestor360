@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, fmtMoney, fmtDateTime } from "@/lib/api";
+import { buildDocumentPdf } from "@/lib/pdf";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Download, Repeat2, Trash2, Plus, ScrollText, Pencil } from "lucide-react";
@@ -23,19 +24,16 @@ export default function Documents() {
 
   const download = async (id) => {
     try {
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
-      const res = await api.get(`/documents/${id}/pdf?tz=${encodeURIComponent(tz)}`, { responseType: "blob" });
-      const url = URL.createObjectURL(res.data);
-      const a = document.createElement("a");
-      a.href = url;
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.download = `documento_${id}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      const [docRes, companyRes, clientsRes] = await Promise.all([
+        api.get(`/documents/${id}`),
+        api.get("/company"),
+        api.get("/clients"),
+      ]);
+      const doc = docRes.data;
+      const client = clientsRes.data.find((c) => c.id === doc.client_id) || {};
+      await buildDocumentPdf(doc, companyRes.data, client);
     } catch (err) {
+      console.error(err);
       toast.error("Falha ao gerar PDF");
     }
   };

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, fmtMoney, computeTotals } from "@/lib/api";
+import { buildDocumentPdf } from "@/lib/pdf";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -316,18 +317,12 @@ export default function QuoteBuilder() {
         toast.success(`${docType === "orcamento" ? "Orçamento" : "Venda"} Nº ${String(data.number).padStart(6, "0")} criado`);
       }
       try {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
-        const res = await api.get(`/documents/${data.id}/pdf?tz=${encodeURIComponent(tz)}`, { responseType: "blob" });
-        const url = URL.createObjectURL(res.data);
-        const a = document.createElement("a");
-        a.href = url;
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.download = `${docType}_${String(data.number).padStart(6, "0")}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        const [companyRes, clientsRes] = await Promise.all([
+          api.get("/company"),
+          api.get("/clients"),
+        ]);
+        const client = clientsRes.data.find((c) => c.id === data.client_id) || {};
+        await buildDocumentPdf(data, companyRes.data, client);
       } catch { toast.error("Documento salvo, mas falhou ao abrir PDF"); }
       navigate("/documentos");
     } catch (err) {

@@ -1,6 +1,11 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+// Vite exposes both `VITE_*` and (via envPrefix) `REACT_APP_*` variables.
+// Support the legacy Node-style `process.env` shim if some code paths still use it.
+const runtimeEnv = (typeof import.meta !== "undefined" && import.meta.env) || {};
+const nodeEnv = (typeof process !== "undefined" && process.env) || {};
+const BACKEND_URL = runtimeEnv.REACT_APP_BACKEND_URL || nodeEnv.REACT_APP_BACKEND_URL || "";
+
 export const API = `${BACKEND_URL}/api`;
 
 export const api = axios.create({
@@ -8,9 +13,9 @@ export const api = axios.create({
   withCredentials: true,
 });
 
-// attach jwt token from localStorage as fallback (for JWT flow)
+// Attach JWT from localStorage as a fallback (backend also supports httpOnly cookies).
 api.interceptors.request.use((config) => {
-  const t = localStorage.getItem("g360_token");
+  const t = typeof localStorage !== "undefined" ? localStorage.getItem("g360_token") : null;
   if (t && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${t}`;
   }

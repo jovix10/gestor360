@@ -1,79 +1,45 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response
-from fastapi.responses import StreamingResponse
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
+"""Gestor360 backend — FastAPI + asyncpg (Supabase Postgres).
+
+All tenant-scoped queries filter by `company_id`. The service-role connection
+used here bypasses RLS, so the WHERE clause is the *only* isolation layer.
+"""
+from __future__ import annotations
+
 import logging
-from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional, Literal
-import uuid
-from datetime import datetime, timezone, timedelta
-from zoneinfo import ZoneInfo
-import bcrypt
-import jwt as pyjwt
+import os
 import re
 import unicodedata
-from io import BytesIO
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import List, Literal, Optional
 
+import bcrypt
+import jwt as pyjwt
+from dotenv import load_dotenv
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from pydantic import BaseModel, EmailStr, Field
+from starlette.middleware.cors import CORSMiddleware
+
+from db import close_pool, execute, fetch, fetchrow, fetchval, get_pool, row_to_dict, rows_to_list
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+JWT_SECRET = os.environ.get("JWT_SECRET") or "gestor360-dev-secret-change-in-prod"
+JWT_ALG = "HS256"
 
 app = FastAPI(title="Gestor360")
 api_router = APIRouter(prefix="/api")
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-JWT_SECRET = os.environ.get('JWT_SECRET', 'gestor360-dev-secret-change-in-prod')
-JWT_ALG = 'HS256'
-ORANGE = colors.HexColor('#F05D23')
-DARK = colors.HexColor('#09090B')
-GRAY = colors.HexColor('#71717A')
-LIGHT = colors.HexColor('#F4F4F5')
-
-Role = Literal['owner', 'gerente', 'vendedor']
+Role = Literal["owner", "gerente", "vendedor"]
 
 
-# ============ MODELS ============
-class Company(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    code: str = ""            # unique slug (empresa login)
-    password_hash: str = ""   # empresa password hash
-    owner_id: str = ""        # user_id of the owner
-    name: str = ""
-    cnpj: str = ""
-    ie: str = ""
-    address: str = ""
-    phone: str = ""
-    email: str = ""
-    logo_data_url: str = ""
-    stock_enabled: bool = False
-    pending_setup: bool = True
-
-
-class CompanyPublic(BaseModel):
-    id: str
-    code: str
-    name: str
-    cnpj: str = ""
-    ie: str = ""
-    address: str = ""
-    phone: str = ""
-    email: str = ""
-    logo_data_url: str = ""
-    stock_enabled: bool = False
-    pending_setup: bool = False
-
-
+# =====================================================================
+# Pydantic models (unchanged wire contract vs. previous version)
+# =====================================================================
 class CompanyUpdateIn(BaseModel):
     name: Optional[str] = None
     cnpj: Optional[str] = None
@@ -89,16 +55,6 @@ class SetupCompanyIn(BaseModel):
     code: str
     password: str
     name: str
-
-
-class UserPublic(BaseModel):
-    user_id: str
-    company_id: str
-    email: str = ""
-    name: str
-    username: str
-    role: Role = "vendedor"
-    picture: str = ""
 
 
 class RegisterIn(BaseModel):
@@ -149,7 +105,7 @@ class ChangeCompanyCredentialsIn(BaseModel):
 
 
 class Client(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: Optional[str] = None
     name: str
     document: str = ""
     ie: str = ""
@@ -167,11 +123,11 @@ class Client(BaseModel):
 
 
 class Product(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: Optional[str] = None
     code: str
     description: str
-    price: float = 0.0        # preço de tabela (venda)
-    cost_price: float = 0.0   # preço de custo (interno - owner/gerente only)
+    price: float = 0.0
+    cost_price: float = 0.0
     stock: float = 0.0
     unit: str = "UN"
 
@@ -189,24 +145,7 @@ class PaymentPart(BaseModel):
     method: str = "pix"
     amount: float = 0.0
     installments: int = 1
-    boleto_days: List[int] = []  # e.g. [30, 60, 90] - dias após emissão
-
-
-class Document(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    doc_type: Literal["orcamento", "venda"] = "orcamento"
-    number: int = 0
-    client_id: str
-    lines: List[DocLine] = []
-    payments: List[PaymentPart] = []
-    global_discount_pct: float = 0.0
-    global_discount_amount: float = 0.0
-    notes: str = ""
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    valid_until: Optional[datetime] = None
-    converted_from: Optional[str] = None
-    status: str = "ativo"
-    created_by: str = ""
+    boleto_days: List[int] = []
 
 
 class DocumentIn(BaseModel):
@@ -228,127 +167,180 @@ class DocumentUpdate(BaseModel):
     notes: Optional[str] = None
 
 
-# ============ AUTH HELPERS ============
+# =====================================================================
+# Auth helpers
+# =====================================================================
 def hash_password(pw: str) -> str:
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
 
 
 def verify_password(pw: str, hashed: str) -> bool:
     try:
-        return bcrypt.checkpw(pw.encode(), hashed.encode())
+        return bcrypt.checkpw(pw.encode(), (hashed or "").encode())
     except Exception:
         return False
 
 
 def create_jwt(user_id: str) -> str:
     payload = {
-        'user_id': user_id,
-        'exp': datetime.now(timezone.utc) + timedelta(days=7),
-        'iat': datetime.now(timezone.utc),
+        "user_id": user_id,
+        "exp": datetime.now(timezone.utc) + timedelta(days=7),
+        "iat": datetime.now(timezone.utc),
     }
     return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 
 def create_company_session(company_id: str) -> str:
     payload = {
-        'company_id': company_id,
-        'exp': datetime.now(timezone.utc) + timedelta(minutes=30),
+        "company_id": company_id,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
     }
     return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 
 def slugify(text: str) -> str:
-    text = unicodedata.normalize('NFKD', text or '').encode('ascii', 'ignore').decode('ascii')
+    text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode("ascii")
     text = text.lower().strip()
-    text = re.sub(r'[^a-z0-9\-_]', '-', text)
-    text = re.sub(r'-+', '-', text).strip('-')
+    text = re.sub(r"[^a-z0-9\-_]", "-", text)
+    text = re.sub(r"-+", "-", text).strip("-")
     return text
+
+
+COOKIE_KW = dict(httponly=True, secure=True, samesite="none", path="/")
 
 
 async def get_current_user(request: Request) -> dict:
     token = None
-    auth = request.headers.get('Authorization', '')
-    if auth.startswith('Bearer '):
-        token = auth[7:]
-    elif request.cookies.get('jwt_token'):
-        token = request.cookies.get('jwt_token')
-    if token:
-        try:
-            payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
-            user = await db.users.find_one({'user_id': payload['user_id']}, {'_id': 0, 'password_hash': 0})
-            if user:
-                return user
-        except Exception:
-            pass
-    raise HTTPException(status_code=401, detail="Não autenticado")
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        token = auth.split(" ", 1)[1].strip()
+    if not token:
+        token = request.cookies.get("jwt_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Não autenticado")
+    try:
+        payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except Exception:
+        raise HTTPException(status_code=401, detail="Sessão expirada")
+    user = await fetchrow(
+        "SELECT user_id, company_id, email, name, username, role, picture, "
+        "must_change_password FROM public.users WHERE user_id = $1",
+        payload.get("user_id", ""),
+    )
+    if not user:
+        raise HTTPException(status_code=401, detail="Não autenticado")
+    d = row_to_dict(user)
+    d["company_id"] = str(d["company_id"])
+    return d
 
 
 async def get_company_of_user(user: dict) -> dict:
-    company = await db.companies.find_one({'id': user['company_id']}, {'_id': 0, 'password_hash': 0})
-    if not company:
+    row = await fetchrow(
+        "SELECT * FROM public.companies WHERE id = $1",
+        uuid.UUID(user["company_id"]),
+    )
+    if not row:
         raise HTTPException(400, "Empresa não encontrada")
-    return company
+    c = row_to_dict(row)
+    c["id"] = str(c["id"])
+    c.pop("password_hash", None)
+    return c
 
 
 def require_roles(user: dict, allowed: List[str]):
-    if user.get('role') not in allowed:
+    if user.get("role") not in allowed:
         raise HTTPException(403, "Sem permissão para essa ação")
 
 
 def _sanitize_user(u: dict) -> dict:
     return {
-        'user_id': u['user_id'],
-        'company_id': u.get('company_id', ''),
-        'email': u.get('email', ''),
-        'name': u.get('name', ''),
-        'username': u.get('username', ''),
-        'role': u.get('role', 'vendedor'),
-        'picture': u.get('picture', ''),
+        "user_id": u["user_id"],
+        "company_id": str(u.get("company_id", "")),
+        "email": u.get("email", "") or "",
+        "name": u.get("name", "") or "",
+        "username": u.get("username", "") or "",
+        "role": u.get("role", "vendedor") or "vendedor",
+        "picture": u.get("picture", "") or "",
     }
 
 
-# ============ AUTH ROUTES ============
+def _serialize_dt(dt):
+    if isinstance(dt, datetime):
+        return dt.astimezone(timezone.utc).isoformat()
+    return dt
+
+
+def _doc_row_out(row: dict) -> dict:
+    """Normalize Postgres row → JSON payload compatible with existing frontend."""
+    if not row:
+        return row
+    d = dict(row)
+    d["id"] = str(d["id"])
+    d["client_id"] = str(d["client_id"])
+    if d.get("converted_from"):
+        d["converted_from"] = str(d["converted_from"])
+    d.pop("company_id", None)
+    for k in ("created_at", "valid_until"):
+        if d.get(k):
+            d[k] = _serialize_dt(d[k])
+    # numeric → float
+    for k in ("global_discount_pct", "global_discount_amount"):
+        if d.get(k) is not None:
+            d[k] = float(d[k])
+    return d
+
+
+# =====================================================================
+# AUTH routes
+# =====================================================================
 @api_router.post("/auth/register")
 async def register(payload: RegisterIn, response: Response):
-    """Sign-up creates a fresh COMPANY with the user as owner."""
-    existing = await db.users.find_one({'email': payload.email.lower()})
+    existing = await fetchrow(
+        "SELECT user_id FROM public.users WHERE LOWER(email) = LOWER($1)", payload.email
+    )
     if existing:
-        raise HTTPException(status_code=400, detail="Email já cadastrado")
+        raise HTTPException(400, "Email já cadastrado")
     user_id = f"user_{uuid.uuid4().hex[:12]}"
     company_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    # Company (pending_setup=True)
-    await db.companies.insert_one({
-        'id': company_id, 'code': '', 'password_hash': '', 'owner_id': user_id,
-        'name': payload.name + " — Empresa", 'cnpj': '', 'ie': '', 'address': '',
-        'phone': '', 'email': payload.email.lower(), 'logo_data_url': '',
-        'stock_enabled': False, 'pending_setup': True,
-    })
-    # Owner user
-    await db.users.insert_one({
-        'user_id': user_id, 'company_id': company_id,
-        'email': payload.email.lower(), 'name': payload.name,
-        'username': 'admin',
-        'password_hash': hash_password(payload.password),
-        'auth_provider': 'email', 'role': 'owner',
-        'must_change_password': False, 'created_at': now,
-    })
+    await execute(
+        "INSERT INTO public.companies (id, code, password_hash, owner_id, name, email, pending_setup) "
+        "VALUES ($1, '', '', $2, $3, $4, TRUE)",
+        uuid.UUID(company_id), user_id, payload.name + " — Empresa", payload.email.lower(),
+    )
+    await execute(
+        "INSERT INTO public.users (user_id, company_id, email, name, username, password_hash, "
+        "auth_provider, role, must_change_password) "
+        "VALUES ($1, $2, $3, $4, 'admin', $5, 'email', 'owner', FALSE)",
+        user_id, uuid.UUID(company_id), payload.email.lower(), payload.name,
+        hash_password(payload.password),
+    )
     token = create_jwt(user_id)
-    response.set_cookie('jwt_token', token, httponly=True, secure=True, samesite='none', path='/', max_age=7*24*3600)
-    return {'user': _sanitize_user({'user_id': user_id, 'company_id': company_id, 'email': payload.email.lower(), 'name': payload.name, 'username': 'admin', 'role': 'owner'}), 'token': token, 'must_change_password': False}
+    response.set_cookie("jwt_token", token, max_age=7 * 24 * 3600, **COOKIE_KW)
+    return {
+        "user": _sanitize_user({
+            "user_id": user_id, "company_id": company_id,
+            "email": payload.email.lower(), "name": payload.name,
+            "username": "admin", "role": "owner",
+        }),
+        "token": token,
+        "must_change_password": False,
+    }
 
 
 @api_router.post("/auth/owner-login")
 async def owner_login(payload: LoginIn, response: Response):
-    """Legacy email/password login — owner only (also used during company setup)."""
-    user = await db.users.find_one({'email': payload.email.lower()})
-    if not user or not user.get('password_hash') or not verify_password(payload.password, user['password_hash']):
+    row = await fetchrow(
+        "SELECT * FROM public.users WHERE LOWER(email) = LOWER($1)", payload.email
+    )
+    if not row or not verify_password(payload.password, row["password_hash"]):
         raise HTTPException(401, "Credenciais inválidas")
-    if user.get('role') != 'owner':
-        raise HTTPException(403, "Este login é apenas para o dono. Peça o código da empresa para entrar como equipe.")
-    token = create_jwt(user['user_id'])
-    response.set_cookie('jwt_token', token, httponly=True, secure=True, samesite='none', path='/', max_age=7*24*3600)
-    return {'user': _sanitize_user(user), 'token': token, 'must_change_password': user.get('must_change_password', False)}
+    user = row_to_dict(row)
+    if user.get("role") != "owner":
+        raise HTTPException(403, "Este login é apenas para o dono.")
+    token = create_jwt(user["user_id"])
+    response.set_cookie("jwt_token", token, max_age=7 * 24 * 3600, **COOKIE_KW)
+    return {"user": _sanitize_user(user), "token": token,
+            "must_change_password": bool(user.get("must_change_password"))}
 
 
 @api_router.post("/auth/company-login")
@@ -356,71 +348,81 @@ async def company_login(payload: CompanyLoginIn, response: Response):
     code = slugify(payload.code)
     if not code:
         raise HTTPException(401, "Empresa não encontrada ou senha inválida")
-    company = await db.companies.find_one({'code': code}, {'_id': 0})
-    if not company or not company.get('password_hash') or not verify_password(payload.password, company['password_hash']):
+    row = await fetchrow("SELECT * FROM public.companies WHERE code = $1", code)
+    if not row or not verify_password(payload.password, row["password_hash"]):
         raise HTTPException(401, "Empresa não encontrada ou senha inválida")
-    session = create_company_session(company['id'])
-    response.set_cookie('company_session', session, httponly=True, secure=True, samesite='none', path='/', max_age=1800)
-    users = await db.users.find({'company_id': company['id']}, {'_id': 0, 'password_hash': 0}).to_list(200)
+    company = row_to_dict(row)
+    company["id"] = str(company["id"])
+    session = create_company_session(company["id"])
+    response.set_cookie("company_session", session, max_age=1800, **COOKIE_KW)
+    users = await fetch(
+        "SELECT user_id, name, username, role, picture FROM public.users "
+        "WHERE company_id = $1 ORDER BY role='owner' DESC, name",
+        uuid.UUID(company["id"]),
+    )
     return {
-        'company': {'id': company['id'], 'code': company['code'], 'name': company['name']},
-        'users': [{'user_id': u['user_id'], 'name': u['name'], 'username': u.get('username', ''), 'role': u.get('role', 'vendedor'), 'picture': u.get('picture', '')} for u in users],
+        "company": {"id": company["id"], "code": company["code"], "name": company["name"]},
+        "users": [dict(u) for u in users],
     }
 
 
 @api_router.post("/auth/user-login")
 async def user_login(payload: UserLoginIn, request: Request, response: Response):
-    comp_token = request.cookies.get('company_session')
+    comp_token = request.cookies.get("company_session")
     if not comp_token:
         raise HTTPException(401, "Sessão de empresa expirada — reentre na empresa")
     try:
         cp = pyjwt.decode(comp_token, JWT_SECRET, algorithms=[JWT_ALG])
-        company_id = cp['company_id']
+        company_id = cp["company_id"]
     except Exception:
         raise HTTPException(401, "Sessão de empresa inválida")
     username = payload.username.lower().strip()
-    user = await db.users.find_one({'company_id': company_id, 'username': username})
-    if not user or not user.get('password_hash') or not verify_password(payload.password, user['password_hash']):
+    row = await fetchrow(
+        "SELECT * FROM public.users WHERE company_id = $1 AND LOWER(username) = $2",
+        uuid.UUID(company_id), username,
+    )
+    if not row or not verify_password(payload.password, row["password_hash"]):
         raise HTTPException(401, "Usuário ou senha inválidos")
-    token = create_jwt(user['user_id'])
-    response.set_cookie('jwt_token', token, httponly=True, secure=True, samesite='none', path='/', max_age=7*24*3600)
-    response.delete_cookie('company_session', path='/')
-    return {'user': _sanitize_user(user), 'token': token, 'must_change_password': user.get('must_change_password', False)}
+    user = row_to_dict(row)
+    user["company_id"] = str(user["company_id"])
+    token = create_jwt(user["user_id"])
+    response.set_cookie("jwt_token", token, max_age=7 * 24 * 3600, **COOKIE_KW)
+    response.delete_cookie("company_session", path="/")
+    return {"user": _sanitize_user(user), "token": token,
+            "must_change_password": bool(user.get("must_change_password"))}
 
 
 @api_router.post("/auth/setup-company")
 async def setup_company(payload: SetupCompanyIn, user: dict = Depends(get_current_user)):
-    require_roles(user, ['owner'])
+    require_roles(user, ["owner"])
     code = slugify(payload.code)
     if len(code) < 3:
         raise HTTPException(400, "Código muito curto (mínimo 3 caracteres)")
     if len(payload.password) < 4:
         raise HTTPException(400, "Senha muito curta")
-    other = await db.companies.find_one({'code': code, 'id': {'$ne': user['company_id']}})
+    other = await fetchrow(
+        "SELECT id FROM public.companies WHERE code = $1 AND id <> $2",
+        code, uuid.UUID(user["company_id"]),
+    )
     if other:
         raise HTTPException(400, "Código já em uso por outra empresa")
-    await db.companies.update_one(
-        {'id': user['company_id']},
-        {'$set': {
-            'code': code,
-            'password_hash': hash_password(payload.password),
-            'name': payload.name,
-            'pending_setup': False,
-        }},
+    await execute(
+        "UPDATE public.companies SET code = $1, password_hash = $2, name = $3, "
+        "pending_setup = FALSE WHERE id = $4",
+        code, hash_password(payload.password), payload.name, uuid.UUID(user["company_id"]),
     )
-    return {'ok': True, 'code': code}
+    return {"ok": True, "code": code}
 
 
 @api_router.get("/auth/lookup-company")
 async def lookup_company(code: str):
-    """Public endpoint — returns just the company name (for two-step login UX)."""
     slug = slugify(code)
     if len(slug) < 3:
-        return {'found': False}
-    company = await db.companies.find_one({'code': slug}, {'_id': 0, 'name': 1, 'code': 1})
-    if not company:
-        return {'found': False}
-    return {'found': True, 'name': company.get('name', ''), 'code': company.get('code', '')}
+        return {"found": False}
+    row = await fetchrow("SELECT name, code FROM public.companies WHERE code = $1", slug)
+    if not row:
+        return {"found": False}
+    return {"found": True, "name": row["name"], "code": row["code"]}
 
 
 @api_router.get("/auth/me")
@@ -428,705 +430,590 @@ async def auth_me(user: dict = Depends(get_current_user)):
     company = await get_company_of_user(user)
     return {
         **_sanitize_user(user),
-        'must_change_password': user.get('must_change_password', False),
-        'company': {
-            'id': company['id'],
-            'code': company.get('code', ''),
-            'name': company.get('name', ''),
-            'pending_setup': company.get('pending_setup', False),
+        "must_change_password": bool(user.get("must_change_password")),
+        "company": {
+            "id": company["id"],
+            "code": company.get("code", ""),
+            "name": company.get("name", ""),
+            "pending_setup": bool(company.get("pending_setup")),
         },
     }
 
 
 @api_router.post("/auth/change-password")
 async def change_password(payload: ChangePasswordIn, user: dict = Depends(get_current_user)):
-    doc = await db.users.find_one({'user_id': user['user_id']})
-    if not doc or not verify_password(payload.current_password, doc.get('password_hash', '')):
+    row = await fetchrow("SELECT password_hash FROM public.users WHERE user_id = $1", user["user_id"])
+    if not row or not verify_password(payload.current_password, row["password_hash"]):
         raise HTTPException(400, "Senha atual incorreta")
     if len(payload.new_password) < 4:
         raise HTTPException(400, "Nova senha muito curta")
-    await db.users.update_one(
-        {'user_id': user['user_id']},
-        {'$set': {'password_hash': hash_password(payload.new_password), 'must_change_password': False}},
+    await execute(
+        "UPDATE public.users SET password_hash = $1, must_change_password = FALSE WHERE user_id = $2",
+        hash_password(payload.new_password), user["user_id"],
     )
-    return {'ok': True}
+    return {"ok": True}
 
 
 @api_router.post("/auth/logout")
-async def logout(response: Response, request: Request):
-    response.delete_cookie('jwt_token', path='/')
-    response.delete_cookie('company_session', path='/')
-    return {'ok': True}
+async def logout(response: Response):
+    response.delete_cookie("jwt_token", path="/")
+    response.delete_cookie("company_session", path="/")
+    return {"ok": True}
 
 
-# ============ TEAM (USERS) — owner only ============
+# =====================================================================
+# TEAM (users) — owner only
+# =====================================================================
 @api_router.get("/users")
 async def list_users(user: dict = Depends(get_current_user)):
-    require_roles(user, ['owner'])
-    rows = await db.users.find({'company_id': user['company_id']}, {'_id': 0, 'password_hash': 0}).to_list(200)
-    return [
-        {
-            'user_id': u['user_id'], 'name': u['name'], 'username': u.get('username', ''),
-            'role': u.get('role', 'vendedor'), 'email': u.get('email', ''),
-            'picture': u.get('picture', ''), 'must_change_password': u.get('must_change_password', False),
-        }
-        for u in rows
-    ]
+    require_roles(user, ["owner"])
+    rows = await fetch(
+        "SELECT user_id, name, username, role, email, picture, must_change_password "
+        "FROM public.users WHERE company_id = $1 ORDER BY role='owner' DESC, name",
+        uuid.UUID(user["company_id"]),
+    )
+    return [dict(r) for r in rows]
 
 
 @api_router.post("/users")
 async def create_user(payload: CreateUserIn, user: dict = Depends(get_current_user)):
-    require_roles(user, ['owner'])
-    if payload.role == 'owner':
+    require_roles(user, ["owner"])
+    if payload.role == "owner":
         raise HTTPException(400, "Não é permitido criar outro dono para a empresa")
     username = payload.username.lower().strip()
     if len(username) < 2:
         raise HTTPException(400, "Nome de usuário muito curto")
-    existing = await db.users.find_one({'company_id': user['company_id'], 'username': username})
-    if existing:
+    dup = await fetchrow(
+        "SELECT user_id FROM public.users WHERE company_id = $1 AND LOWER(username) = $2",
+        uuid.UUID(user["company_id"]), username,
+    )
+    if dup:
         raise HTTPException(400, "Nome de usuário já em uso na empresa")
     if len(payload.password) < 4:
         raise HTTPException(400, "Senha muito curta")
-    new_user_id = f"user_{uuid.uuid4().hex[:12]}"
-    doc = {
-        'user_id': new_user_id, 'company_id': user['company_id'],
-        'name': payload.name, 'username': username,
-        'email': payload.email.lower() if payload.email else '',
-        'password_hash': hash_password(payload.password),
-        'auth_provider': 'email', 'role': payload.role,
-        'must_change_password': True, 'picture': '',
-        'created_at': datetime.now(timezone.utc).isoformat(),
-    }
-    await db.users.insert_one(doc)
-    return {'user_id': new_user_id, 'name': payload.name, 'username': username, 'role': payload.role}
+    new_id = f"user_{uuid.uuid4().hex[:12]}"
+    await execute(
+        "INSERT INTO public.users (user_id, company_id, email, name, username, password_hash, "
+        "auth_provider, role, must_change_password) VALUES "
+        "($1, $2, $3, $4, $5, $6, 'email', $7, TRUE)",
+        new_id, uuid.UUID(user["company_id"]),
+        (payload.email or "").lower(), payload.name, username,
+        hash_password(payload.password), payload.role,
+    )
+    return {"user_id": new_id, "name": payload.name, "username": username, "role": payload.role}
 
 
 @api_router.put("/users/{target_user_id}")
 async def update_user(target_user_id: str, payload: UpdateUserIn, user: dict = Depends(get_current_user)):
-    require_roles(user, ['owner'])
-    target = await db.users.find_one({'user_id': target_user_id, 'company_id': user['company_id']})
+    require_roles(user, ["owner"])
+    target = await fetchrow(
+        "SELECT role FROM public.users WHERE user_id = $1 AND company_id = $2",
+        target_user_id, uuid.UUID(user["company_id"]),
+    )
     if not target:
         raise HTTPException(404, "Usuário não encontrado")
-    if target.get('role') == 'owner' and payload.role and payload.role != 'owner':
+    if target["role"] == "owner" and payload.role and payload.role != "owner":
         raise HTTPException(400, "Não é possível rebaixar o dono")
-    update = {}
-    if payload.name is not None: update['name'] = payload.name
-    if payload.role is not None: update['role'] = payload.role
+    sets: list[str] = []
+    args: list = []
+    idx = 1
+    if payload.name is not None:
+        sets.append(f"name = ${idx}"); args.append(payload.name); idx += 1
+    if payload.role is not None:
+        sets.append(f"role = ${idx}"); args.append(payload.role); idx += 1
     if payload.password is not None:
         if len(payload.password) < 4:
             raise HTTPException(400, "Senha muito curta")
-        update['password_hash'] = hash_password(payload.password)
-        update['must_change_password'] = True
+        sets.append(f"password_hash = ${idx}"); args.append(hash_password(payload.password)); idx += 1
+        sets.append(f"must_change_password = TRUE")
     if payload.must_change_password is not None:
-        update['must_change_password'] = payload.must_change_password
-    if update:
-        await db.users.update_one({'user_id': target_user_id}, {'$set': update})
-    return {'ok': True}
+        sets.append(f"must_change_password = ${idx}"); args.append(payload.must_change_password); idx += 1
+    if sets:
+        args.append(target_user_id)
+        await execute(f"UPDATE public.users SET {', '.join(sets)} WHERE user_id = ${idx}", *args)
+    return {"ok": True}
 
 
 @api_router.delete("/users/{target_user_id}")
 async def delete_user(target_user_id: str, user: dict = Depends(get_current_user)):
-    require_roles(user, ['owner'])
-    target = await db.users.find_one({'user_id': target_user_id, 'company_id': user['company_id']})
+    require_roles(user, ["owner"])
+    target = await fetchrow(
+        "SELECT role FROM public.users WHERE user_id = $1 AND company_id = $2",
+        target_user_id, uuid.UUID(user["company_id"]),
+    )
     if not target:
         raise HTTPException(404, "Usuário não encontrado")
-    if target.get('role') == 'owner':
+    if target["role"] == "owner":
         raise HTTPException(400, "Não é possível excluir o dono")
-    await db.users.delete_one({'user_id': target_user_id})
-    return {'ok': True}
+    await execute("DELETE FROM public.users WHERE user_id = $1", target_user_id)
+    return {"ok": True}
 
 
-# ============ COMPANY ============
+# =====================================================================
+# COMPANY
+# =====================================================================
 @api_router.get("/company")
 async def get_company(user: dict = Depends(get_current_user)):
-    company = await get_company_of_user(user)
-    return company
+    return await get_company_of_user(user)
 
 
 @api_router.put("/company")
 async def update_company(payload: CompanyUpdateIn, user: dict = Depends(get_current_user)):
-    require_roles(user, ['owner', 'gerente'])
-    update = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
-    if update:
-        await db.companies.update_one({'id': user['company_id']}, {'$set': update})
+    require_roles(user, ["owner", "gerente"])
+    data = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
+    if data:
+        sets: list[str] = []
+        args: list = []
+        idx = 1
+        for k, v in data.items():
+            sets.append(f"{k} = ${idx}"); args.append(v); idx += 1
+        args.append(uuid.UUID(user["company_id"]))
+        await execute(f"UPDATE public.companies SET {', '.join(sets)} WHERE id = ${idx}", *args)
     return await get_company_of_user(user)
 
 
 @api_router.post("/company/change-credentials")
-async def change_company_credentials(payload: ChangeCompanyCredentialsIn, user: dict = Depends(get_current_user)):
-    require_roles(user, ['owner'])
-    company = await db.companies.find_one({'id': user['company_id']})
-    if not company or not verify_password(payload.current_password, company.get('password_hash', '')):
+async def change_company_credentials(
+    payload: ChangeCompanyCredentialsIn, user: dict = Depends(get_current_user)
+):
+    require_roles(user, ["owner"])
+    row = await fetchrow(
+        "SELECT code, password_hash FROM public.companies WHERE id = $1",
+        uuid.UUID(user["company_id"]),
+    )
+    if not row or not verify_password(payload.current_password, row["password_hash"]):
         raise HTTPException(400, "Senha atual da empresa incorreta")
-    update = {}
+    sets: list[str] = []
+    args: list = []
+    idx = 1
+    new_code_final = row["code"]
     if payload.new_code:
         new_code = slugify(payload.new_code)
         if len(new_code) < 3:
             raise HTTPException(400, "Código muito curto (mínimo 3 caracteres)")
-        other = await db.companies.find_one({'code': new_code, 'id': {'$ne': user['company_id']}})
-        if other:
+        dup = await fetchrow(
+            "SELECT id FROM public.companies WHERE code = $1 AND id <> $2",
+            new_code, uuid.UUID(user["company_id"]),
+        )
+        if dup:
             raise HTTPException(400, "Código já em uso por outra empresa")
-        update['code'] = new_code
+        sets.append(f"code = ${idx}"); args.append(new_code); idx += 1
+        new_code_final = new_code
     if payload.new_password:
         if len(payload.new_password) < 4:
             raise HTTPException(400, "Nova senha muito curta")
-        update['password_hash'] = hash_password(payload.new_password)
-    if not update:
+        sets.append(f"password_hash = ${idx}"); args.append(hash_password(payload.new_password)); idx += 1
+    if not sets:
         raise HTTPException(400, "Informe um novo código ou nova senha")
-    await db.companies.update_one({'id': user['company_id']}, {'$set': update})
-    return {'ok': True, 'code': update.get('code', company.get('code', ''))}
+    args.append(uuid.UUID(user["company_id"]))
+    await execute(f"UPDATE public.companies SET {', '.join(sets)} WHERE id = ${idx}", *args)
+    return {"ok": True, "code": new_code_final}
 
 
-# ============ CLIENTS ============
-@api_router.get("/clients", response_model=List[Client])
+# =====================================================================
+# CLIENTS
+# =====================================================================
+CLIENT_COLS = [
+    "id", "name", "document", "ie", "email", "phone", "cep", "street",
+    "number", "complement", "district", "city", "state", "address", "notes",
+]
+
+
+@api_router.get("/clients")
 async def list_clients(user: dict = Depends(get_current_user)):
-    rows = await db.clients.find({'company_id': user['company_id']}, {'_id': 0, 'company_id': 0}).to_list(5000)
-    return rows
+    rows = await fetch(
+        f"SELECT {', '.join(CLIENT_COLS)} FROM public.clients "
+        "WHERE company_id = $1 ORDER BY name",
+        uuid.UUID(user["company_id"]),
+    )
+    out = []
+    for r in rows:
+        d = dict(r); d["id"] = str(d["id"]); out.append(d)
+    return out
 
 
-@api_router.post("/clients", response_model=Client)
+@api_router.post("/clients")
 async def create_client(payload: Client, user: dict = Depends(get_current_user)):
-    if not payload.id:
-        payload.id = str(uuid.uuid4())
+    new_id = payload.id or str(uuid.uuid4())
     doc = payload.model_dump()
-    doc['company_id'] = user['company_id']
-    await db.clients.insert_one(dict(doc))
-    doc.pop('company_id', None)
+    doc["id"] = new_id
+    cols = ", ".join(["company_id"] + CLIENT_COLS)
+    placeholders = ", ".join(f"${i+1}" for i in range(len(CLIENT_COLS) + 1))
+    vals = [uuid.UUID(user["company_id"]), uuid.UUID(new_id)] + [doc[c] for c in CLIENT_COLS[1:]]
+    await execute(f"INSERT INTO public.clients ({cols}) VALUES ({placeholders})", *vals)
+    doc["id"] = new_id
     return doc
 
 
-@api_router.put("/clients/{client_id}", response_model=Client)
+@api_router.put("/clients/{client_id}")
 async def update_client(client_id: str, payload: Client, user: dict = Depends(get_current_user)):
-    payload.id = client_id
-    res = await db.clients.update_one(
-        {'id': client_id, 'company_id': user['company_id']},
-        {'$set': {**payload.model_dump(), 'company_id': user['company_id']}},
+    doc = payload.model_dump()
+    doc["id"] = client_id
+    sets = ", ".join(f"{c} = ${i+1}" for i, c in enumerate(CLIENT_COLS[1:]))
+    args = [doc[c] for c in CLIENT_COLS[1:]] + [uuid.UUID(client_id), uuid.UUID(user["company_id"])]
+    res = await execute(
+        f"UPDATE public.clients SET {sets} WHERE id = ${len(CLIENT_COLS)} AND company_id = ${len(CLIENT_COLS)+1}",
+        *args,
     )
-    if res.matched_count == 0:
+    if res.endswith("0"):
         raise HTTPException(404, "Cliente não encontrado")
-    return payload
+    return doc
 
 
 @api_router.delete("/clients/{client_id}")
 async def delete_client(client_id: str, user: dict = Depends(get_current_user)):
-    await db.clients.delete_one({'id': client_id, 'company_id': user['company_id']})
-    return {'ok': True}
+    await execute(
+        "DELETE FROM public.clients WHERE id = $1 AND company_id = $2",
+        uuid.UUID(client_id), uuid.UUID(user["company_id"]),
+    )
+    return {"ok": True}
 
 
-# ============ PRODUCTS ============
-def _strip_cost_for_role(rows, user):
-    """Vendedor does not see cost_price."""
-    if user.get('role') == 'vendedor':
+# =====================================================================
+# PRODUCTS
+# =====================================================================
+PRODUCT_COLS = ["id", "code", "description", "price", "cost_price", "stock", "unit"]
+
+
+def _strip_cost(rows, user):
+    if user.get("role") == "vendedor":
         for r in rows:
-            r.pop('cost_price', None)
+            r.pop("cost_price", None)
     return rows
 
 
 @api_router.get("/products")
 async def list_products(user: dict = Depends(get_current_user)):
-    rows = await db.products.find({'company_id': user['company_id']}, {'_id': 0, 'company_id': 0}).to_list(10000)
-    return _strip_cost_for_role(rows, user)
+    rows = await fetch(
+        f"SELECT {', '.join(PRODUCT_COLS)} FROM public.products "
+        "WHERE company_id = $1 ORDER BY code, description",
+        uuid.UUID(user["company_id"]),
+    )
+    out = []
+    for r in rows:
+        d = dict(r); d["id"] = str(d["id"])
+        for k in ("price", "cost_price", "stock"):
+            d[k] = float(d[k])
+        out.append(d)
+    return _strip_cost(out, user)
 
 
 @api_router.post("/products")
 async def create_product(payload: Product, user: dict = Depends(get_current_user)):
-    if not payload.id:
-        payload.id = str(uuid.uuid4())
-    exists = await db.products.find_one({'company_id': user['company_id'], 'code': payload.code})
-    if exists:
-        raise HTTPException(400, detail="Código de produto já existe")
-    doc = payload.model_dump()
-    # vendedor não pode definir cost_price
-    if user.get('role') == 'vendedor':
-        doc['cost_price'] = 0.0
-    doc['company_id'] = user['company_id']
-    await db.products.insert_one(dict(doc))
-    doc.pop('company_id', None)
-    return _strip_cost_for_role([doc], user)[0]
+    dup = await fetchrow(
+        "SELECT id FROM public.products WHERE company_id = $1 AND code = $2",
+        uuid.UUID(user["company_id"]), payload.code,
+    )
+    if dup:
+        raise HTTPException(400, "Código de produto já existe")
+    new_id = payload.id or str(uuid.uuid4())
+    cost = 0.0 if user.get("role") == "vendedor" else payload.cost_price
+    await execute(
+        "INSERT INTO public.products (id, company_id, code, description, price, cost_price, stock, unit) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        uuid.UUID(new_id), uuid.UUID(user["company_id"]),
+        payload.code, payload.description, payload.price, cost, payload.stock, payload.unit,
+    )
+    out = payload.model_dump(); out["id"] = new_id; out["cost_price"] = cost
+    return _strip_cost([out], user)[0]
 
 
 @api_router.put("/products/{product_id}")
 async def update_product(product_id: str, payload: Product, user: dict = Depends(get_current_user)):
-    existing = await db.products.find_one({'id': product_id, 'company_id': user['company_id']}, {'_id': 0})
+    existing = await fetchrow(
+        "SELECT cost_price FROM public.products WHERE id = $1 AND company_id = $2",
+        uuid.UUID(product_id), uuid.UUID(user["company_id"]),
+    )
     if not existing:
         raise HTTPException(404, "Produto não encontrado")
-    payload.id = product_id
-    doc = payload.model_dump()
-    doc['company_id'] = user['company_id']
-    # vendedor: preserva cost_price original (não permite alterar)
-    if user.get('role') == 'vendedor':
-        doc['cost_price'] = existing.get('cost_price', 0.0)
-    await db.products.update_one({'id': product_id, 'company_id': user['company_id']}, {'$set': doc})
-    doc.pop('company_id', None)
-    return _strip_cost_for_role([doc], user)[0]
+    cost = float(existing["cost_price"]) if user.get("role") == "vendedor" else payload.cost_price
+    await execute(
+        "UPDATE public.products SET code=$1, description=$2, price=$3, cost_price=$4, "
+        "stock=$5, unit=$6 WHERE id=$7 AND company_id=$8",
+        payload.code, payload.description, payload.price, cost, payload.stock, payload.unit,
+        uuid.UUID(product_id), uuid.UUID(user["company_id"]),
+    )
+    out = payload.model_dump(); out["id"] = product_id; out["cost_price"] = cost
+    return _strip_cost([out], user)[0]
 
 
 @api_router.delete("/products/{product_id}")
 async def delete_product(product_id: str, user: dict = Depends(get_current_user)):
-    await db.products.delete_one({'id': product_id, 'company_id': user['company_id']})
-    return {'ok': True}
-
-
-# ============ DOCUMENTS ============
-async def next_doc_number(company_id: str, doc_type: str) -> int:
-    counter = await db.counters.find_one_and_update(
-        {'company_id': company_id, 'doc_type': doc_type},
-        {'$inc': {'value': 1}},
-        upsert=True,
-        return_document=True,
+    await execute(
+        "DELETE FROM public.products WHERE id = $1 AND company_id = $2",
+        uuid.UUID(product_id), uuid.UUID(user["company_id"]),
     )
-    return counter['value'] if counter else 1
+    return {"ok": True}
 
 
-def _serialize_doc(doc: dict) -> dict:
-    for key in ('created_at', 'valid_until'):
-        if key in doc and isinstance(doc[key], datetime):
-            doc[key] = doc[key].isoformat()
-    return doc
+# =====================================================================
+# DOCUMENTS
+# =====================================================================
+async def next_doc_number(company_id: str, doc_type: str) -> int:
+    return int(await fetchval("SELECT public.next_doc_number($1, $2)", uuid.UUID(company_id), doc_type))
 
 
-def _doc_visibility_filter(user: dict) -> dict:
-    """Vendedor sees only own documents; gerente/owner see everything in the company."""
-    base = {'company_id': user['company_id']}
-    if user.get('role') == 'vendedor':
-        base['created_by'] = user['user_id']
-    return base
+def _doc_where_filter(user: dict, base_alias: str = "d") -> tuple[str, list]:
+    """Build tenant + role visibility WHERE fragment (starts at $1)."""
+    args = [uuid.UUID(user["company_id"])]
+    where = f"{base_alias}.company_id = $1"
+    if user.get("role") == "vendedor":
+        args.append(user["user_id"])
+        where += f" AND {base_alias}.created_by = $2"
+    return where, args
+
+
+def _compute_total(row: dict) -> float:
+    line_total = 0.0
+    for line in row.get("lines") or []:
+        gross = float(line.get("quantity") or 0) * float(line.get("unit_price") or 0)
+        line_total += gross * (1 - float(line.get("discount_pct") or 0) / 100)
+    gpct = float(row.get("global_discount_pct") or 0)
+    gamt = float(row.get("global_discount_amount") or 0)
+    return round(max(line_total * (1 - gpct / 100) - gamt, 0), 2)
 
 
 @api_router.get("/documents")
 async def list_documents(user: dict = Depends(get_current_user)):
-    q = _doc_visibility_filter(user)
-    rows = await db.documents.find(q, {'_id': 0, 'company_id': 0}).sort('created_at', -1).to_list(2000)
-    client_ids = list({r['client_id'] for r in rows if r.get('client_id')})
-    clients = {c['id']: c for c in await db.clients.find({'company_id': user['company_id'], 'id': {'$in': client_ids}}, {'_id': 0}).to_list(2000)}
-    # created_by name map
-    user_ids = list({r.get('created_by') for r in rows if r.get('created_by')})
-    users = {u['user_id']: u for u in await db.users.find({'user_id': {'$in': user_ids}}, {'_id': 0, 'password_hash': 0}).to_list(200)}
+    where, args = _doc_where_filter(user)
+    rows = await fetch(
+        f"""
+        SELECT d.id, d.doc_type, d.number, d.client_id, d.lines, d.payments,
+               d.global_discount_pct, d.global_discount_amount, d.notes,
+               d.created_at, d.valid_until, d.converted_from, d.status, d.created_by,
+               c.name AS client_name,
+               u.name AS created_by_name
+        FROM public.documents d
+        LEFT JOIN public.clients c ON c.id = d.client_id
+        LEFT JOIN public.users u ON u.user_id = d.created_by
+        WHERE {where}
+        ORDER BY d.created_at DESC
+        LIMIT 2000
+        """,
+        *args,
+    )
+    out = []
     for r in rows:
-        c = clients.get(r.get('client_id'), {})
-        r['client_name'] = c.get('name', '—')
-        creator = users.get(r.get('created_by'), {})
-        r['created_by_name'] = creator.get('name', '')
-        line_total = 0.0
-        for line in r.get('lines', []):
-            gross = float(line.get('quantity', 0)) * float(line.get('unit_price', 0))
-            line_total += gross * (1 - float(line.get('discount_pct', 0)) / 100)
-        gpct = float(r.get('global_discount_pct', 0) or 0)
-        gamt = float(r.get('global_discount_amount', 0) or 0)
-        final_total = line_total * (1 - gpct / 100) - gamt
-        r['total'] = round(max(final_total, 0), 2)
-    return rows
+        d = _doc_row_out(dict(r))
+        d["client_name"] = r["client_name"] or "—"
+        d["created_by_name"] = r["created_by_name"] or ""
+        d["total"] = _compute_total(d)
+        out.append(d)
+    return out
 
 
 @api_router.post("/documents")
 async def create_document(payload: DocumentIn, user: dict = Depends(get_current_user)):
-    cli = await db.clients.find_one({'id': payload.client_id, 'company_id': user['company_id']})
+    cli = await fetchrow(
+        "SELECT id FROM public.clients WHERE id = $1 AND company_id = $2",
+        uuid.UUID(payload.client_id), uuid.UUID(user["company_id"]),
+    )
     if not cli:
-        raise HTTPException(400, detail="Cliente inválido")
-    number = await next_doc_number(user['company_id'], payload.doc_type)
+        raise HTTPException(400, "Cliente inválido")
+    number = await next_doc_number(user["company_id"], payload.doc_type)
     now = datetime.now(timezone.utc)
-    doc = Document(
-        doc_type=payload.doc_type,
-        number=number,
-        client_id=payload.client_id,
-        lines=payload.lines,
-        payments=payload.payments,
-        global_discount_pct=payload.global_discount_pct,
-        global_discount_amount=payload.global_discount_amount,
-        notes=payload.notes,
-        created_at=now,
-        valid_until=(now + timedelta(hours=72)) if payload.doc_type == 'orcamento' else None,
-        created_by=user['user_id'],
-    ).model_dump()
-    doc['company_id'] = user['company_id']
-    doc = _serialize_doc(doc)
+    valid_until = now + timedelta(hours=72) if payload.doc_type == "orcamento" else None
+    new_id = str(uuid.uuid4())
+    lines = [l.model_dump() for l in payload.lines]
+    payments = [p.model_dump() for p in payload.payments]
 
     company = await get_company_of_user(user)
-    if company.get('stock_enabled') and payload.doc_type == 'venda':
+    if company.get("stock_enabled") and payload.doc_type == "venda":
         for line in payload.lines:
             if line.product_id:
-                await db.products.update_one(
-                    {'id': line.product_id, 'company_id': user['company_id']},
-                    {'$inc': {'stock': -float(line.quantity)}},
+                await execute(
+                    "UPDATE public.products SET stock = stock - $1 WHERE id = $2 AND company_id = $3",
+                    float(line.quantity), uuid.UUID(line.product_id), uuid.UUID(user["company_id"]),
                 )
-    await db.documents.insert_one(dict(doc))
-    doc.pop('company_id', None)
-    return doc
+
+    await execute(
+        """
+        INSERT INTO public.documents
+          (id, company_id, doc_type, number, client_id, lines, payments,
+           global_discount_pct, global_discount_amount, notes,
+           created_at, valid_until, created_by, status)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'ativo')
+        """,
+        uuid.UUID(new_id), uuid.UUID(user["company_id"]), payload.doc_type, number,
+        uuid.UUID(payload.client_id), lines, payments,
+        payload.global_discount_pct, payload.global_discount_amount, payload.notes,
+        now, valid_until, user["user_id"],
+    )
+    return {
+        "id": new_id, "doc_type": payload.doc_type, "number": number,
+        "client_id": payload.client_id, "lines": lines, "payments": payments,
+        "global_discount_pct": payload.global_discount_pct,
+        "global_discount_amount": payload.global_discount_amount,
+        "notes": payload.notes,
+        "created_at": _serialize_dt(now),
+        "valid_until": _serialize_dt(valid_until),
+        "status": "ativo", "created_by": user["user_id"],
+    }
 
 
 @api_router.get("/documents/{doc_id}")
 async def get_document(doc_id: str, user: dict = Depends(get_current_user)):
-    q = {**_doc_visibility_filter(user), 'id': doc_id}
-    doc = await db.documents.find_one(q, {'_id': 0, 'company_id': 0})
-    if not doc:
+    where, args = _doc_where_filter(user)
+    args.append(uuid.UUID(doc_id))
+    row = await fetchrow(
+        f"SELECT * FROM public.documents d WHERE {where} AND d.id = ${len(args)}",
+        *args,
+    )
+    if not row:
         raise HTTPException(404, "Documento não encontrado")
-    return doc
+    return _doc_row_out(dict(row))
 
 
 @api_router.put("/documents/{doc_id}")
 async def update_document(doc_id: str, payload: DocumentUpdate, user: dict = Depends(get_current_user)):
-    q = {**_doc_visibility_filter(user), 'id': doc_id}
-    doc = await db.documents.find_one(q, {'_id': 0})
-    if not doc:
+    where, args = _doc_where_filter(user)
+    args.append(uuid.UUID(doc_id))
+    existing = await fetchrow(
+        f"SELECT id FROM public.documents d WHERE {where} AND d.id = ${len(args)}",
+        *args,
+    )
+    if not existing:
         raise HTTPException(404, "Documento não encontrado")
-    update = {}
+    sets: list[str] = []
+    upd_args: list = []
+    idx = 1
     if payload.client_id is not None:
-        cli = await db.clients.find_one({'id': payload.client_id, 'company_id': user['company_id']})
+        cli = await fetchrow(
+            "SELECT id FROM public.clients WHERE id = $1 AND company_id = $2",
+            uuid.UUID(payload.client_id), uuid.UUID(user["company_id"]),
+        )
         if not cli:
             raise HTTPException(400, "Cliente inválido")
-        update['client_id'] = payload.client_id
+        sets.append(f"client_id = ${idx}"); upd_args.append(uuid.UUID(payload.client_id)); idx += 1
     if payload.lines is not None:
-        update['lines'] = [l.model_dump() for l in payload.lines]
+        sets.append(f"lines = ${idx}::jsonb"); upd_args.append([l.model_dump() for l in payload.lines]); idx += 1
     if payload.payments is not None:
-        update['payments'] = [p.model_dump() for p in payload.payments]
+        sets.append(f"payments = ${idx}::jsonb"); upd_args.append([p.model_dump() for p in payload.payments]); idx += 1
     if payload.global_discount_pct is not None:
-        update['global_discount_pct'] = payload.global_discount_pct
+        sets.append(f"global_discount_pct = ${idx}"); upd_args.append(payload.global_discount_pct); idx += 1
     if payload.global_discount_amount is not None:
-        update['global_discount_amount'] = payload.global_discount_amount
+        sets.append(f"global_discount_amount = ${idx}"); upd_args.append(payload.global_discount_amount); idx += 1
     if payload.notes is not None:
-        update['notes'] = payload.notes
-    if update:
-        await db.documents.update_one({'id': doc_id, 'company_id': user['company_id']}, {'$set': update})
-    updated = await db.documents.find_one({'id': doc_id, 'company_id': user['company_id']}, {'_id': 0, 'company_id': 0})
-    return updated
+        sets.append(f"notes = ${idx}"); upd_args.append(payload.notes); idx += 1
+    if sets:
+        upd_args.extend([uuid.UUID(doc_id), uuid.UUID(user["company_id"])])
+        await execute(
+            f"UPDATE public.documents SET {', '.join(sets)} "
+            f"WHERE id = ${idx} AND company_id = ${idx+1}",
+            *upd_args,
+        )
+    row = await fetchrow(
+        "SELECT * FROM public.documents WHERE id = $1 AND company_id = $2",
+        uuid.UUID(doc_id), uuid.UUID(user["company_id"]),
+    )
+    return _doc_row_out(dict(row))
 
 
 @api_router.post("/documents/{doc_id}/convert")
 async def convert_document(doc_id: str, user: dict = Depends(get_current_user)):
-    q = {**_doc_visibility_filter(user), 'id': doc_id}
-    src = await db.documents.find_one(q, {'_id': 0})
+    where, args = _doc_where_filter(user)
+    args.append(uuid.UUID(doc_id))
+    src = await fetchrow(
+        f"SELECT * FROM public.documents d WHERE {where} AND d.id = ${len(args)}",
+        *args,
+    )
     if not src:
         raise HTTPException(404, "Orçamento não encontrado")
-    if src['doc_type'] != 'orcamento':
+    if src["doc_type"] != "orcamento":
         raise HTTPException(400, "Só orçamentos podem ser convertidos")
-    number = await next_doc_number(user['company_id'], 'venda')
+    number = await next_doc_number(user["company_id"], "venda")
     now = datetime.now(timezone.utc)
-    new_doc = {
-        'id': str(uuid.uuid4()),
-        'doc_type': 'venda',
-        'number': number,
-        'client_id': src['client_id'],
-        'lines': src.get('lines', []),
-        'payments': src.get('payments', []),
-        'notes': src.get('notes', ''),
-        'created_at': now.isoformat(),
-        'valid_until': None,
-        'converted_from': src['id'],
-        'status': 'ativo',
-        'company_id': user['company_id'],
-        'created_by': user['user_id'],
-    }
+    new_id = str(uuid.uuid4())
+    lines = src["lines"] or []
+    payments = src["payments"] or []
     company = await get_company_of_user(user)
-    if company.get('stock_enabled'):
-        for line in src.get('lines', []):
-            if line.get('product_id'):
-                await db.products.update_one(
-                    {'id': line['product_id'], 'company_id': user['company_id']},
-                    {'$inc': {'stock': -float(line.get('quantity', 0))}},
+    if company.get("stock_enabled"):
+        for line in lines:
+            if line.get("product_id"):
+                await execute(
+                    "UPDATE public.products SET stock = stock - $1 WHERE id = $2 AND company_id = $3",
+                    float(line.get("quantity") or 0), uuid.UUID(line["product_id"]),
+                    uuid.UUID(user["company_id"]),
                 )
-    await db.documents.insert_one(dict(new_doc))
-    new_doc.pop('company_id', None)
-    return new_doc
+    await execute(
+        """
+        INSERT INTO public.documents
+          (id, company_id, doc_type, number, client_id, lines, payments,
+           global_discount_pct, global_discount_amount, notes,
+           created_at, valid_until, converted_from, status, created_by)
+        VALUES ($1,$2,'venda',$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,'ativo',$12)
+        """,
+        uuid.UUID(new_id), uuid.UUID(user["company_id"]), number,
+        src["client_id"], lines, payments,
+        float(src["global_discount_pct"] or 0), float(src["global_discount_amount"] or 0),
+        src["notes"] or "", now, src["id"], user["user_id"],
+    )
+    row = await fetchrow(
+        "SELECT * FROM public.documents WHERE id = $1", uuid.UUID(new_id)
+    )
+    return _doc_row_out(dict(row))
 
 
 @api_router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str, user: dict = Depends(get_current_user)):
-    q = {**_doc_visibility_filter(user), 'id': doc_id}
-    await db.documents.delete_one(q)
-    return {'ok': True}
+    where, args = _doc_where_filter(user)
+    args.append(uuid.UUID(doc_id))
+    await execute(
+        f"DELETE FROM public.documents d WHERE {where} AND d.id = ${len(args)}",
+        *args,
+    )
+    return {"ok": True}
 
 
-# ============ PDF ============
-def _fmt_money(v: float) -> str:
-    return f"R$ {v:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-
-
-def _valid_tz(tz_name: str) -> bool:
-    try:
-        ZoneInfo(tz_name)
-        return True
-    except Exception:
-        return False
-
-
-def _to_local(dt, tz_name: str = "America/Sao_Paulo"):
-    if not dt:
-        return None
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:
-        tz = ZoneInfo("America/Sao_Paulo")
-    if isinstance(dt, str):
-        dt = datetime.fromisoformat(dt)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(tz)
-
-
-def _build_pdf(doc: dict, company: dict, client: dict, tz_name: str = "America/Sao_Paulo") -> BytesIO:
-    buf = BytesIO()
-    pdf = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm, topMargin=1.2*cm, bottomMargin=1.5*cm)
-    styles = getSampleStyleSheet()
-    title = ParagraphStyle('t', parent=styles['Heading1'], fontSize=20, textColor=DARK, spaceAfter=0, leading=24)
-    small = ParagraphStyle('s', parent=styles['Normal'], fontSize=9, textColor=GRAY, leading=12)
-    body = ParagraphStyle('b', parent=styles['Normal'], fontSize=10, textColor=DARK, leading=13)
-    label = ParagraphStyle('l', parent=styles['Normal'], fontSize=8, textColor=GRAY, leading=10)
-    doc_title = ParagraphStyle('dt', parent=styles['Heading2'], fontSize=14, textColor=ORANGE, spaceAfter=0)
-
-    story = []
-    header_left = []
-    if company.get('logo_data_url', '').startswith('data:image'):
-        try:
-            import base64
-            b64 = company['logo_data_url'].split(',', 1)[1]
-            img_buf = BytesIO(base64.b64decode(b64))
-            header_left.append(Image(img_buf, width=3.5*cm, height=3.5*cm, kind='proportional'))
-        except Exception:
-            header_left.append(Paragraph(f"<b>{company.get('name', '')}</b>", title))
-    else:
-        header_left.append(Paragraph(f"<b>{company.get('name') or 'Sua Empresa'}</b>", title))
-
-    header_left.append(Spacer(1, 4))
-    header_left.append(Paragraph(f"CNPJ: {company.get('cnpj', '—')}", small))
-    if company.get('ie'):
-        header_left.append(Paragraph(f"IE: {company['ie']}", small))
-    header_left.append(Paragraph(company.get('address', ''), small))
-    header_left.append(Paragraph(f"Tel: {company.get('phone', '')}   {company.get('email', '')}", small))
-
-    doc_type_label = 'ORÇAMENTO' if doc['doc_type'] == 'orcamento' else 'VENDA'
-    header_right = []
-    header_right.append(Paragraph(f"<b>{doc_type_label}</b>", doc_title))
-    header_right.append(Paragraph(f"Nº {doc['number']:06d}", body))
-    created_local = _to_local(doc.get('created_at'), tz_name)
-    header_right.append(Paragraph(f"Emissão: {created_local.strftime('%d/%m/%Y %H:%M')}", small))
-    if doc.get('valid_until'):
-        vu_local = _to_local(doc['valid_until'], tz_name)
-        header_right.append(Paragraph(f"Validade: {vu_local.strftime('%d/%m/%Y %H:%M')}", small))
-
-    header_table = Table([[header_left, header_right]], colWidths=[11*cm, 6.5*cm])
-    header_table.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('ALIGN', (1, 0), (1, 0), 'RIGHT')]))
-    story.append(header_table)
-    story.append(Spacer(1, 8))
-    sep = Table([['']], colWidths=[18*cm], rowHeights=[3])
-    sep.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), ORANGE)]))
-    story.append(sep)
-    story.append(Spacer(1, 14))
-
-    story.append(Paragraph("CLIENTE", label))
-    story.append(Spacer(1, 4))
-    parts = []
-    if client.get('street'):
-        s = client['street']
-        if client.get('number'): s += f", {client['number']}"
-        if client.get('complement'): s += f" — {client['complement']}"
-        parts.append(s)
-    if client.get('district'): parts.append(client['district'])
-    if client.get('city'):
-        parts.append(f"{client['city']}/{client.get('state','')}" if client.get('state') else client['city'])
-    if client.get('cep'): parts.append(f"CEP {client['cep']}")
-    full_address = " · ".join(parts) if parts else (client.get('address') or '—')
-    client_rows = [
-        [Paragraph("<b>Nome</b>", small), Paragraph(client.get('name', '—'), body),
-         Paragraph("<b>Documento</b>", small), Paragraph(client.get('document', '—'), body)],
-        [Paragraph("<b>Endereço</b>", small), Paragraph(full_address, body),
-         Paragraph("<b>Telefone</b>", small), Paragraph(client.get('phone', '—'), body)],
-        [Paragraph("<b>Email</b>", small), Paragraph(client.get('email', '—'), body),
-         Paragraph("<b>IE</b>", small), Paragraph(client.get('ie', '—'), body)],
-    ]
-    ct = Table(client_rows, colWidths=[2.5*cm, 7*cm, 2.5*cm, 6*cm])
-    ct.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ('LINEBELOW', (0, -1), (-1, -1), 0.5, colors.HexColor('#E4E4E7')),
-        ('LINEABOVE', (0, 0), (-1, 0), 0.5, colors.HexColor('#E4E4E7')),
-    ]))
-    story.append(ct)
-    story.append(Spacer(1, 14))
-
-    header_row = ['Cód.', 'Descrição', 'Qtd.', 'Valor Unit.', 'Bruto', 'Líquido']
-    lines = doc.get('lines', [])
-    total_gross = 0.0
-    total_disc = 0.0
-    total_net = 0.0
-    data = [header_row]
-    for line in lines:
-        qty = float(line.get('quantity', 0))
-        price = float(line.get('unit_price', 0))
-        disc = float(line.get('discount_pct', 0))
-        gross = qty * price
-        net = gross * (1 - disc / 100)
-        disc_val = gross - net
-        total_gross += gross
-        total_disc += disc_val
-        total_net += net
-        data.append([
-            line.get('code', '') or '—',
-            line.get('description', '') or '',
-            f"{qty:g}",
-            _fmt_money(price),
-            _fmt_money(gross),
-            _fmt_money(net),
-        ])
-    table = Table(data, colWidths=[1.8*cm, 7.4*cm, 1.8*cm, 2.6*cm, 2.5*cm, 2.5*cm], repeatRows=1)
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), DARK),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 9),
-        ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
-        ('ALIGN', (0, 0), (1, -1), 'LEFT'),
-        ('FONTSIZE', (0, 1), (-1, -1), 9),
-        ('TEXTCOLOR', (0, 1), (-1, -1), DARK),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, LIGHT]),
-        ('LINEBELOW', (0, 0), (-1, 0), 1, ORANGE),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-    ]))
-    story.append(table)
-    story.append(Spacer(1, 16))
-
-    totals_data = [
-        ['Subtotal Bruto', _fmt_money(total_gross)],
-        ['Desconto nos itens', f"- {_fmt_money(total_disc)}"],
-    ]
-    line_net = total_net
-    gpct = float(doc.get('global_discount_pct', 0) or 0)
-    gamt = float(doc.get('global_discount_amount', 0) or 0)
-    global_disc_value = line_net * (gpct / 100) + gamt
-    final_total = max(line_net - global_disc_value, 0)
-    if gpct > 0 or gamt > 0:
-        label_gd = 'Desconto no total'
-        if gpct > 0 and gamt == 0:
-            label_gd = f'Desconto no total ({gpct:g}%)'
-        totals_data.append([label_gd, f"- {_fmt_money(global_disc_value)}"])
-    totals_data.append(['TOTAL LÍQUIDO', _fmt_money(final_total)])
-    total_rows = len(totals_data)
-    tot = Table(totals_data, colWidths=[10*cm, 4.5*cm])
-    tot.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('TEXTCOLOR', (0, 0), (-1, total_rows - 2), GRAY),
-        ('FONTNAME', (0, total_rows - 1), (-1, total_rows - 1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, total_rows - 1), (-1, total_rows - 1), 13),
-        ('TEXTCOLOR', (0, total_rows - 1), (-1, total_rows - 1), DARK),
-        ('BACKGROUND', (0, total_rows - 1), (-1, total_rows - 1), colors.HexColor('#FDF0EC')),
-        ('LINEABOVE', (0, total_rows - 1), (-1, total_rows - 1), 1.5, ORANGE),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-    ]))
-    wrap = Table([['', tot]], colWidths=[3*cm, 14.5*cm])
-    wrap.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP')]))
-    story.append(wrap)
-
-    if doc.get('notes'):
-        story.append(Spacer(1, 16))
-        story.append(Paragraph("OBSERVAÇÕES", label))
-        story.append(Paragraph(doc['notes'], body))
-
-    if doc.get('payments'):
-        story.append(Spacer(1, 14))
-        story.append(Paragraph("CONDIÇÕES DE PAGAMENTO", label))
-        story.append(Spacer(1, 4))
-        method_labels = {'pix': 'PIX', 'dinheiro': 'Dinheiro', 'credito': 'Cartão de Crédito', 'debito': 'Cartão de Débito', 'boleto': 'Boleto', 'transferencia': 'Transferência'}
-        pay_data = []
-        for p in doc['payments']:
-            m = method_labels.get(p.get('method', ''), p.get('method', ''))
-            amount = float(p.get('amount', 0))
-            inst = int(p.get('installments', 1) or 1)
-            detail = ''
-            if p.get('method') == 'credito' and inst > 1:
-                per = amount / inst
-                detail = f" · {inst}x de {_fmt_money(per)}"
-            if p.get('method') == 'boleto' and p.get('boleto_days'):
-                days = [int(d) for d in p['boleto_days'] if int(d) > 0]
-                if days:
-                    n = len(days)
-                    per = amount / n
-                    created_dt = _to_local(doc.get('created_at'), tz_name)
-                    parcelas = []
-                    for i, d in enumerate(days, 1):
-                        due = created_dt + timedelta(days=d)
-                        parcelas.append(f"{i}ª/{due.strftime('%d/%m/%Y')} — {_fmt_money(per)}")
-                    detail = f" · {n}x de {_fmt_money(per)}<br/><font size='8' color='#71717A'>{'  ·  '.join(parcelas)}</font>"
-            pay_data.append([Paragraph(m, body), Paragraph(_fmt_money(amount) + detail, body)])
-        pay_table = Table(pay_data, colWidths=[10*cm, 7.5*cm])
-        pay_table.setStyle(TableStyle([
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('LINEBELOW', (0, 0), (-1, -1), 0.3, colors.HexColor('#E4E4E7')),
-        ]))
-        story.append(pay_table)
-
-    story.append(Spacer(1, 24))
-    now_local = datetime.now(ZoneInfo(tz_name) if _valid_tz(tz_name) else ZoneInfo("America/Sao_Paulo"))
-    footer = Paragraph(f"<font color='#A1A1AA'>Documento gerado por Gestor360 · {now_local.strftime('%d/%m/%Y')}</font>", small)
-    story.append(footer)
-
-    pdf.build(story)
-    buf.seek(0)
-    return buf
-
-
-@api_router.get("/documents/{doc_id}/pdf")
-async def get_document_pdf(doc_id: str, tz: str = "America/Sao_Paulo", user: dict = Depends(get_current_user)):
-    q = {**_doc_visibility_filter(user), 'id': doc_id}
-    doc = await db.documents.find_one(q, {'_id': 0})
-    if not doc:
-        raise HTTPException(404)
-    company = await get_company_of_user(user)
-    client = await db.clients.find_one({'id': doc['client_id'], 'company_id': user['company_id']}, {'_id': 0}) or {}
-    tz_name = tz if _valid_tz(tz) else "America/Sao_Paulo"
-    buf = _build_pdf(doc, company, client, tz_name=tz_name)
-    filename = f"{'orcamento' if doc['doc_type'] == 'orcamento' else 'venda'}_{doc['number']:06d}.pdf"
-    return StreamingResponse(buf, media_type='application/pdf', headers={'Content-Disposition': f'inline; filename="{filename}"'})
-
-
-# ============ STATS ============
+# =====================================================================
+# STATS
+# =====================================================================
 @api_router.get("/stats")
 async def stats(user: dict = Depends(get_current_user)):
-    base_cli = {'company_id': user['company_id']}
-    doc_filter = _doc_visibility_filter(user)
-    clients_count = await db.clients.count_documents(base_cli)
-    products_count = await db.products.count_documents(base_cli)
-    orc_count = await db.documents.count_documents({**doc_filter, 'doc_type': 'orcamento'})
-    ven_count = await db.documents.count_documents({**doc_filter, 'doc_type': 'venda'})
+    company_uuid = uuid.UUID(user["company_id"])
+    clients_count = await fetchval("SELECT COUNT(*) FROM public.clients WHERE company_id = $1", company_uuid)
+    products_count = await fetchval("SELECT COUNT(*) FROM public.products WHERE company_id = $1", company_uuid)
+    doc_where, doc_args = _doc_where_filter(user)
+    orc_count = await fetchval(
+        f"SELECT COUNT(*) FROM public.documents d WHERE {doc_where} AND d.doc_type = 'orcamento'",
+        *doc_args,
+    )
+    ven_count = await fetchval(
+        f"SELECT COUNT(*) FROM public.documents d WHERE {doc_where} AND d.doc_type = 'venda'",
+        *doc_args,
+    )
     now = datetime.now(timezone.utc)
-    month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc).isoformat()
-    sales = await db.documents.find({**doc_filter, 'doc_type': 'venda', 'created_at': {'$gte': month_start}}, {'_id': 0}).to_list(5000)
+    month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    sales = await fetch(
+        f"SELECT lines, global_discount_pct, global_discount_amount FROM public.documents d "
+        f"WHERE {doc_where} AND d.doc_type = 'venda' AND d.created_at >= ${len(doc_args)+1}",
+        *doc_args, month_start,
+    )
     revenue = 0.0
     for s in sales:
-        for line in s.get('lines', []):
-            gross = float(line.get('quantity', 0)) * float(line.get('unit_price', 0))
-            revenue += gross * (1 - float(line.get('discount_pct', 0)) / 100)
+        revenue += _compute_total(dict(s))
     return {
-        'clients': clients_count,
-        'products': products_count,
-        'orcamentos': orc_count,
-        'vendas': ven_count,
-        'revenue_month': round(revenue, 2),
-        'scope': 'own' if user.get('role') == 'vendedor' else 'company',
+        "clients": int(clients_count or 0),
+        "products": int(products_count or 0),
+        "orcamentos": int(orc_count or 0),
+        "vendas": int(ven_count or 0),
+        "revenue_month": round(revenue, 2),
+        "scope": "own" if user.get("role") == "vendedor" else "company",
     }
 
 
 @api_router.get("/")
 async def root():
-    return {'app': 'Gestor360', 'ok': True}
+    return {"app": "Gestor360", "ok": True}
 
 
 app.include_router(api_router)
 
 # CORS: restrict to configured frontend + localhost for dev
-_frontend_url = os.environ.get('FRONTEND_URL', '').rstrip('/')
-_allowed_origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+_frontend_url = os.environ.get("FRONTEND_URL", "").rstrip("/")
+_allowed_origins = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"]
 if _frontend_url:
     _allowed_origins.append(_frontend_url)
-
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -1136,92 +1023,38 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
 
 @app.on_event("startup")
-async def migrate_and_seed():
-    """Migrate v1 (single-tenant per user) to v2 (multi-user per company)."""
-    # 1) Migrate legacy company docs (user_id scoped, no 'id' field)
-    async for old_comp in db.companies.find({'code': {'$exists': False}}):
-        user_id = old_comp.get('user_id')
-        if not user_id:
-            continue
-        company_id = str(uuid.uuid4())
-        old_user = await db.users.find_one({'user_id': user_id})
-        company_name = (old_user.get('name', '') if old_user else '') + " — Empresa"
-        await db.companies.update_one(
-            {'_id': old_comp['_id']},
-            {
-                '$set': {
-                    'id': company_id,
-                    'owner_id': user_id,
-                    'code': '',
-                    'password_hash': '',
-                    'ie': old_comp.get('ie', ''),
-                    'pending_setup': True,
-                    'name': old_comp.get('name') or company_name,
-                },
-                '$unset': {'user_id': ''},
-            },
-        )
-        await db.users.update_one(
-            {'user_id': user_id},
-            {'$set': {
-                'company_id': company_id, 'role': 'owner',
-                'username': 'admin', 'must_change_password': False,
-            }},
-        )
-        await db.clients.update_many({'user_id': user_id}, {'$set': {'company_id': company_id}, '$unset': {'user_id': ''}})
-        await db.products.update_many({'user_id': user_id}, {'$set': {'company_id': company_id}, '$unset': {'user_id': ''}})
-        await db.documents.update_many({'user_id': user_id}, {'$set': {'company_id': company_id, 'created_by': user_id}, '$unset': {'user_id': ''}})
-        await db.counters.update_many({'user_id': user_id}, {'$set': {'company_id': company_id}, '$unset': {'user_id': ''}})
-        logger.info(f"Migrated v1 → v2 for user {user_id} → company {company_id}")
-
-    # 2) Seed owner if missing
-    owner_email = 'netozincaovendas@gmail.com'
-    existing = await db.users.find_one({'email': owner_email})
-    if not existing:
+async def on_startup():
+    """Optionally seed a first owner. Requires SEED_OWNER_* env vars."""
+    seed_email = os.environ.get("SEED_OWNER_EMAIL", "").strip().lower()
+    seed_name = os.environ.get("SEED_OWNER_NAME", "").strip()
+    seed_pw = os.environ.get("SEED_OWNER_PASSWORD", "")
+    if not (seed_email and seed_name and seed_pw):
+        return
+    try:
+        await get_pool()  # connects lazily
+        exists = await fetchrow("SELECT user_id FROM public.users WHERE LOWER(email) = $1", seed_email)
+        if exists:
+            return
         user_id = f"user_{uuid.uuid4().hex[:12]}"
-        company_id = str(uuid.uuid4())
-        await db.companies.insert_one({
-            'id': company_id, 'code': '', 'password_hash': '', 'owner_id': user_id,
-            'name': 'Gestor360', 'cnpj': '', 'ie': '', 'address': '',
-            'phone': '', 'email': owner_email, 'logo_data_url': '',
-            'stock_enabled': False, 'pending_setup': True,
-        })
-        await db.users.insert_one({
-            'user_id': user_id, 'company_id': company_id,
-            'email': owner_email, 'name': 'Neto', 'username': 'admin',
-            'password_hash': hash_password('Gestor360!'),
-            'auth_provider': 'email', 'role': 'owner',
-            'must_change_password': False,
-            'created_at': datetime.now(timezone.utc).isoformat(),
-        })
-        logger.info(f"Seeded owner {owner_email}")
-    else:
-        # Ensure the seeded user has role/username/company after migration
-        upd = {}
-        if not existing.get('role'): upd['role'] = 'owner'
-        if not existing.get('username'): upd['username'] = 'admin'
-        if upd:
-            await db.users.update_one({'user_id': existing['user_id']}, {'$set': upd})
-
-    # 3) Fallback: any user without a company gets one (pending setup)
-    async for u in db.users.find({'company_id': {'$exists': False}}):
-        company_id = str(uuid.uuid4())
-        await db.companies.insert_one({
-            'id': company_id, 'code': '', 'password_hash': '', 'owner_id': u['user_id'],
-            'name': u.get('name', 'Minha Empresa'), 'cnpj': '', 'ie': '',
-            'address': '', 'phone': '', 'email': u.get('email', ''),
-            'logo_data_url': '', 'stock_enabled': False, 'pending_setup': True,
-        })
-        await db.users.update_one({'user_id': u['user_id']}, {'$set': {
-            'company_id': company_id, 'role': 'owner', 'username': u.get('username', 'admin'),
-        }})
+        company_id = uuid.uuid4()
+        await execute(
+            "INSERT INTO public.companies (id, code, password_hash, owner_id, name, email, pending_setup) "
+            "VALUES ($1, '', '', $2, $3, $4, TRUE)",
+            company_id, user_id, seed_name + " — Empresa", seed_email,
+        )
+        await execute(
+            "INSERT INTO public.users (user_id, company_id, email, name, username, password_hash, "
+            "auth_provider, role, must_change_password) "
+            "VALUES ($1, $2, $3, $4, 'admin', $5, 'email', 'owner', FALSE)",
+            user_id, company_id, seed_email, seed_name, hash_password(seed_pw),
+        )
+        logger.info("Seeded owner %s", seed_email)
+    except Exception as exc:
+        logger.warning("Seed skipped: %s", exc)
 
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+async def on_shutdown():
+    await close_pool()
